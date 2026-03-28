@@ -1,0 +1,3 @@
+# CoDeXSdY: Tu Súper Profesor en el Bolsillo 🚀
+
+**CoDeXSdY** es como tener un asistente inteligente en tu celular que te ayuda a aprender lo que sea de forma divertida y sin que te canses. Solo tienes que pasarle un documento o decirle qué quieres estudiar, y el robot **CoDy** (creado por **Jeff**) se encarga de leerlo y crearte pequeños juegos de preguntas y respuestas para que repases. La aplicación es tan lista que sabe exactamente cuándo se te va a olvidar algo y te avisa en el momento justo para que lo vuelvas a ver rápido. Además, puedes chatear con CoDy para que te explique cualquier duda, escuchar los textos en voz alta y estar tranquilo de que tu progreso siempre está a salvo en internet.

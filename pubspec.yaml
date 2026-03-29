@@ -80,6 +80,7 @@ flutter:
   assets:
     - assets/
     - assets/fonts/
+    - shorebird.yaml
 
   fonts:
     - family: Aquire

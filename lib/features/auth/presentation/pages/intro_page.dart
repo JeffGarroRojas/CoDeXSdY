@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:math' as math;
 import '../../../../core/theme/app_theme.dart';
 
 class IntroPage extends StatefulWidget {
@@ -19,18 +21,18 @@ class _IntroPageState extends State<IntroPage> {
     _IntroSlide(
       title: 'CoDeXSdY',
       subtitle: 'Tu asistente de estudio con IA',
-      description: 'Hecho para estudiantes de Costa Rica 🇸🇷',
+      description: 'Hecho para estudiantes de Costa Rica',
       icon: Icons.smart_toy,
-      gradient: const [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+      gradient: const [Color(0xFF6366F1), Color(0xFFA855F7), Color(0xFFEC4899)],
       iconColor: Colors.white,
       features: null,
     ),
     _IntroSlide(
       title: 'Con conexión 📶',
-      subtitle: 'Potencia la IA de CoDy',
+      subtitle: 'Potencia la IA de DeX',
       description: 'Aprovecha todo el poder de la inteligencia artificial',
       icon: Icons.wifi,
-      gradient: const [Color(0xFF059669), Color(0xFF10B981)],
+      gradient: const [Color(0xFF10B981), Color(0xFF34D399), Color(0xFF6EE7B7)],
       iconColor: Colors.white,
       features: [
         _Feature(
@@ -44,7 +46,7 @@ class _IntroPageState extends State<IntroPage> {
           'Crea tarjetas de estudio al instante',
         ),
         _Feature(
-          'Chat con CoDy',
+          'Chat con DeX',
           Icons.chat_bubble,
           'Pregunta lo que necesites',
         ),
@@ -60,13 +62,13 @@ class _IntroPageState extends State<IntroPage> {
       subtitle: 'Activa Fuentes Desconocidas',
       description: 'Necesario para instalar actualizaciones automáticas',
       icon: Icons.system_update,
-      gradient: const [Color(0xFFEF4444), Color(0xFFF97316)],
+      gradient: const [Color(0xFFF97316), Color(0xFFFB923C), Color(0xFFFDBA74)],
       iconColor: Colors.white,
       features: [
         _Feature(
           'Actualizaciones automáticas',
           Icons.download,
-          'Recibe mejoras sin conectar al电脑',
+          'Recibe mejoras sin conectar al dispositivo',
         ),
         _Feature(
           'Corrección de errores',
@@ -85,8 +87,8 @@ class _IntroPageState extends State<IntroPage> {
       subtitle: 'Sigue estudiando offline',
       description: 'Tus datos siempre disponibles',
       icon: Icons.cloud_off,
-      gradient: const [Color(0xFFF59E0B), Color(0xFFFBBF24)],
-      iconColor: Colors.white,
+      gradient: const [Color(0xFFFBBF24), Color(0xFFFCD34D), Color(0xFFFEF3C7)],
+      iconColor: Color(0xFF78350F),
       features: [
         _Feature(
           'Estudiar archivos',
@@ -121,34 +123,101 @@ class _IntroPageState extends State<IntroPage> {
     }
   }
 
+  Future<void> _openUnknownSourcesSettings() async {
+    try {
+      final Uri uri = Uri.parse('app-settings:');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        _showManualInstructions();
+      }
+    } catch (e) {
+      _showManualInstructions();
+    }
+  }
+
+  void _showManualInstructions() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.white),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Ve a: Configuración > Apps > CoDeXSdY > Instalar apps desconocidas',
+                style: TextStyle(fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF6366F1),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
             colors: [
-              AppTheme.backgroundColor,
-              _slides[_currentPage].gradient[0].withValues(alpha: 0.1),
+              Color(0xFF6366F1),
+              Color(0xFF8B5CF6),
+              Color(0xFF1E1E2E),
+              Color(0xFF0F0F1A),
             ],
+            stops: const [0.0, 0.3, 0.7, 1.0],
           ),
         ),
-        child: SafeArea(
-          child: Column(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 500),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: _slides[_currentPage].gradient.isNotEmpty
+                  ? [
+                      _slides[_currentPage].gradient[0],
+                      _slides[_currentPage].gradient[1].withValues(alpha: 0.5),
+                      const Color(0xFF1E1E2E),
+                      const Color(0xFF0F0F1A),
+                    ]
+                  : [
+                      const Color(0xFF6366F1),
+                      const Color(0xFF1E1E2E),
+                      const Color(0xFF0F0F1A),
+                    ],
+              stops: const [0.0, 0.3, 0.7, 1.0],
+            ),
+          ),
+          child: Stack(
             children: [
-              _buildSkipButton(),
-              Expanded(
-                child: PageView.builder(
-                  controller: _pageController,
-                  itemCount: _slides.length,
-                  onPageChanged: (index) =>
-                      setState(() => _currentPage = index),
-                  itemBuilder: (context, index) => _buildSlide(index),
+              Positioned.fill(child: CustomPaint(painter: _GradientPainter())),
+              SafeArea(
+                child: Column(
+                  children: [
+                    _buildSkipButton(),
+                    Expanded(
+                      child: PageView.builder(
+                        controller: _pageController,
+                        itemCount: _slides.length,
+                        onPageChanged: (index) =>
+                            setState(() => _currentPage = index),
+                        itemBuilder: (context, index) => _buildSlide(index),
+                      ),
+                    ),
+                    _buildBottomSection(),
+                  ],
                 ),
               ),
-              _buildBottomSection(),
             ],
           ),
         ),
@@ -177,6 +246,7 @@ class _IntroPageState extends State<IntroPage> {
   Widget _buildSlide(int index) {
     final slide = _slides[index];
     final isActive = _currentPage == index;
+    final isUpdateSlide = slide.title.contains('Actualizaciones');
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -194,6 +264,10 @@ class _IntroPageState extends State<IntroPage> {
             const SizedBox(height: 32),
             _buildFeatures(slide, isActive),
           ],
+          if (isUpdateSlide) ...[
+            const SizedBox(height: 24),
+            _buildSettingsButton(isActive),
+          ],
         ],
       ),
     );
@@ -201,7 +275,30 @@ class _IntroPageState extends State<IntroPage> {
 
   Widget _buildIcon(_IntroSlide slide, bool isActive) {
     return RepaintBoundary(
-      child:
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      slide.gradient[0].withValues(alpha: 0.3),
+                      slide.gradient[1].withValues(alpha: 0.1),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              )
+              .animate(target: isActive ? 1 : 0)
+              .fadeIn(duration: 600.ms)
+              .scale(
+                begin: const Offset(0.5, 0.5),
+                end: const Offset(1, 1),
+                duration: 600.ms,
+              ),
           Container(
                 width: 160,
                 height: 160,
@@ -214,9 +311,14 @@ class _IntroPageState extends State<IntroPage> {
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: slide.gradient[0].withValues(alpha: 0.4),
-                      blurRadius: 25,
-                      spreadRadius: 5,
+                      color: slide.gradient[0].withValues(alpha: 0.5),
+                      blurRadius: 30,
+                      spreadRadius: 8,
+                    ),
+                    BoxShadow(
+                      color: slide.gradient[1].withValues(alpha: 0.3),
+                      blurRadius: 50,
+                      spreadRadius: 15,
                     ),
                   ],
                 ),
@@ -230,6 +332,8 @@ class _IntroPageState extends State<IntroPage> {
                 duration: 400.ms,
                 curve: Curves.easeOutBack,
               ),
+        ],
+      ),
     );
   }
 
@@ -243,6 +347,7 @@ class _IntroPageState extends State<IntroPage> {
               style: TextStyle(
                 fontSize: 38,
                 fontWeight: FontWeight.bold,
+                fontFamily: 'Aquire',
                 color: Colors.white,
               ),
             ),
@@ -370,6 +475,18 @@ class _IntroPageState extends State<IntroPage> {
     );
   }
 
+  Widget _buildSettingsButton(bool isActive) {
+    return TextButton.icon(
+      onPressed: _openUnknownSourcesSettings,
+      icon: const Icon(Icons.settings, size: 18),
+      label: const Text('Abrir configuración'),
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white70,
+        textStyle: const TextStyle(fontSize: 13),
+      ),
+    ).animate(target: isActive ? 1 : 0).fadeIn(delay: 500.ms);
+  }
+
   Widget _buildBottomSection() {
     return Padding(
       padding: const EdgeInsets.all(32),
@@ -389,15 +506,29 @@ class _IntroPageState extends State<IntroPage> {
       children: List.generate(_slides.length, (index) {
         final isActive = _currentPage == index;
         return AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 300),
           margin: const EdgeInsets.symmetric(horizontal: 4),
-          width: isActive ? 28 : 8,
-          height: 8,
+          width: isActive ? 32 : 10,
+          height: 10,
           decoration: BoxDecoration(
-            color: isActive
-                ? _slides[_currentPage].gradient[0]
-                : Colors.grey[600],
-            borderRadius: BorderRadius.circular(4),
+            gradient: isActive
+                ? const LinearGradient(
+                    colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: isActive ? null : Colors.grey[700],
+            borderRadius: BorderRadius.circular(5),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF6366F1).withValues(alpha: 0.4),
+                      blurRadius: 6,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
           ),
         );
       }),
@@ -410,21 +541,26 @@ class _IntroPageState extends State<IntroPage> {
 
     return SizedBox(
       width: double.infinity,
-      height: 52,
+      height: 56,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
+        duration: const Duration(milliseconds: 300),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: slide.gradient,
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: slide.gradient[0].withValues(alpha: 0.3),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: slide.gradient[0].withValues(alpha: 0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+            BoxShadow(
+              color: slide.gradient[1].withValues(alpha: 0.2),
+              blurRadius: 30,
+              spreadRadius: 2,
             ),
           ],
         ),
@@ -479,6 +615,50 @@ class _IntroSlide {
     required this.iconColor,
     this.features,
   });
+}
+
+class _GradientPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..shader =
+          RadialGradient(
+            colors: [Colors.white.withValues(alpha: 0.1), Colors.transparent],
+            stops: const [0.0, 1.0],
+          ).createShader(
+            Rect.fromCircle(
+              center: Offset(size.width * 0.2, size.height * 0.3),
+              radius: size.width * 0.8,
+            ),
+          );
+    canvas.drawCircle(
+      Offset(size.width * 0.2, size.height * 0.3),
+      size.width * 0.6,
+      paint,
+    );
+
+    final paint2 = Paint()
+      ..shader =
+          RadialGradient(
+            colors: [
+              Color(0xFF22D3EE).withValues(alpha: 0.08),
+              Colors.transparent,
+            ],
+          ).createShader(
+            Rect.fromCircle(
+              center: Offset(size.width * 0.8, size.height * 0.7),
+              radius: size.width * 0.7,
+            ),
+          );
+    canvas.drawCircle(
+      Offset(size.width * 0.8, size.height * 0.7),
+      size.width * 0.5,
+      paint2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _Feature {

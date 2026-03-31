@@ -3,16 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'dart:math' as math;
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../../core/services/validation_service.dart';
 import '../../../../core/services/database_service.dart';
 import '../../../../core/widgets/animated_border.dart';
 import '../../../../main.dart';
 
 class AuthPage extends ConsumerStatefulWidget {
   final VoidCallback onLoginSuccess;
-  final VoidCallback onGuestMode;
+  final Future<void> Function() onGuestMode;
 
   const AuthPage({
     super.key,
@@ -25,7 +25,49 @@ class AuthPage extends ConsumerStatefulWidget {
 }
 
 class _AuthPageState extends ConsumerState<AuthPage> {
-  final _validation = ValidationService.instance;
+  String? validateName(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Ingresa tu nombre';
+    if (value.trim().length < 2) return 'El nombre es muy corto';
+    return null;
+  }
+
+  String? validateEmail(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Ingresa tu email';
+    if (!value.contains('@') || !value.contains('.')) return 'Email inválido';
+    return null;
+  }
+
+  String? validatePassword(String? value) {
+    if (value == null || value.isEmpty) return 'Ingresa tu contraseña';
+    if (value.length < 6) return 'Mínimo 6 caracteres';
+    return null;
+  }
+
+  String? validatePasswordStrength(String? value) {
+    if (value == null || value.isEmpty) return 'Ingresa tu contraseña';
+    if (value.length < 6) return 'Mínimo 6 caracteres';
+    if (!value.contains(RegExp(r'[A-Z]'))) return 'Incluye mayúscula';
+    if (!value.contains(RegExp(r'[0-9]'))) return 'Incluye número';
+    return null;
+  }
+
+  int calculatePasswordStrength(String password) {
+    int strength = 0;
+    if (password.length >= 6) strength++;
+    if (password.length >= 8) strength++;
+    if (password.contains(RegExp(r'[A-Z]'))) strength++;
+    if (password.contains(RegExp(r'[a-z]'))) strength++;
+    if (password.contains(RegExp(r'[0-9]'))) strength++;
+    if (password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) strength++;
+    return strength;
+  }
+
+  String getPasswordStrengthLabel(int strength) {
+    if (strength < 3) return 'Débil';
+    if (strength < 5) return 'Moderada';
+    return 'Fuerte';
+  }
+
   bool _isLogin = true;
   bool _isLoading = false;
   String? _errorMessage;
@@ -47,38 +89,58 @@ class _AuthPageState extends ConsumerState<AuthPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildLogo(),
-                  const SizedBox(height: 40),
-                  _buildTitle(),
-                  const SizedBox(height: 32),
-                  _buildGoogleButton(),
-                  const SizedBox(height: 24),
-                  _buildDivider(),
-                  const SizedBox(height: 24),
-                  _buildForm(),
-                  if (_errorMessage != null) ...[
-                    const SizedBox(height: 16),
-                    _buildError(),
-                  ],
-                  const SizedBox(height: 24),
-                  _buildSubmitButton(),
-                  const SizedBox(height: 12),
-                  _buildToggleButton(),
-                  const SizedBox(height: 24),
-                  _buildGuestModeButton(),
-                ],
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF6366F1),
+              Color(0xFF8B5CF6),
+              Color(0xFF1E1E2E),
+              Color(0xFF0F0F1A),
+            ],
+            stops: const [0.0, 0.3, 0.7, 1.0],
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(painter: _AuthGradientPainter()),
+            ),
+            SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildLogo(),
+                      const SizedBox(height: 40),
+                      _buildTitle(),
+                      const SizedBox(height: 32),
+                      _buildGoogleButton(),
+                      const SizedBox(height: 24),
+                      _buildDivider(),
+                      const SizedBox(height: 24),
+                      _buildForm(),
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 16),
+                        _buildError(),
+                      ],
+                      const SizedBox(height: 24),
+                      _buildSubmitButton(),
+                      const SizedBox(height: 12),
+                      _buildToggleButton(),
+                      const SizedBox(height: 24),
+                      _buildGuestModeButton(),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -185,9 +247,9 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              widget.onGuestMode();
+              await widget.onGuestMode();
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
             child: const Text('Continuar como invitado'),
@@ -242,14 +304,15 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     return Column(
       children: [
         ShaderMask(
-          shaderCallback: (bounds) => LinearGradient(
-            colors: [AppTheme.primaryColor, AppTheme.secondaryColor],
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [Color(0xFF6366F1), Color(0xFF22D3EE)],
           ).createShader(bounds),
           child: const Text(
             'CoDeXSdY',
             style: TextStyle(
-              fontSize: 28,
+              fontSize: 36,
               fontWeight: FontWeight.bold,
+              fontFamily: 'Aquire',
               color: Colors.white,
             ),
           ),
@@ -350,7 +413,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                           errorText: _getFieldError('name'),
                         ),
                         validator: (value) {
-                          final error = _validation.validateName(value);
+                          final error = validateName(value);
                           if (error != null) {
                             _setFieldError('name', error);
                             return error;
@@ -373,7 +436,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                   errorText: _getFieldError('email'),
                 ),
                 validator: (value) {
-                  final error = _validation.validateEmail(value);
+                  final error = validateEmail(value);
                   if (error != null) {
                     _setFieldError('email', error);
                     return error;
@@ -409,8 +472,8 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                 ),
                 validator: (value) {
                   final error = _isLogin
-                      ? _validation.validatePassword(value)
-                      : _validation.validatePasswordStrength(value);
+                      ? validatePassword(value)
+                      : validatePasswordStrength(value);
                   if (error != null) {
                     _setFieldError('password', error);
                     return error;
@@ -453,9 +516,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
   }
 
   Widget _buildPasswordStrengthIndicator() {
-    final strength = ValidationService.calculatePasswordStrength(
-      _passwordController.text,
-    );
+    final strength = calculatePasswordStrength(_passwordController.text);
     final maxStrength = 7;
     final percentage = strength / maxStrength;
 
@@ -482,7 +543,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
             ),
             const SizedBox(width: 12),
             Text(
-              ValidationService.getPasswordStrengthLabel(strength),
+              getPasswordStrengthLabel(strength),
               style: TextStyle(color: color, fontSize: 12),
             ),
           ],
@@ -770,4 +831,47 @@ class _AuthPageState extends ConsumerState<AuthPage> {
         return 'Error de autenticación';
     }
   }
+}
+
+class _AuthGradientPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..shader =
+          RadialGradient(
+            colors: [Colors.white.withValues(alpha: 0.1), Colors.transparent],
+          ).createShader(
+            Rect.fromCircle(
+              center: Offset(size.width * 0.15, size.height * 0.25),
+              radius: size.width * 0.8,
+            ),
+          );
+    canvas.drawCircle(
+      Offset(size.width * 0.15, size.height * 0.25),
+      size.width * 0.6,
+      paint,
+    );
+
+    final paint2 = Paint()
+      ..shader =
+          RadialGradient(
+            colors: [
+              Color(0xFF22D3EE).withValues(alpha: 0.08),
+              Colors.transparent,
+            ],
+          ).createShader(
+            Rect.fromCircle(
+              center: Offset(size.width * 0.85, size.height * 0.75),
+              radius: size.width * 0.7,
+            ),
+          );
+    canvas.drawCircle(
+      Offset(size.width * 0.85, size.height * 0.75),
+      size.width * 0.5,
+      paint2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

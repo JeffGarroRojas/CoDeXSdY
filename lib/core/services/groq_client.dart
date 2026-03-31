@@ -1,425 +1,371 @@
 import 'package:dio/dio.dart';
-import 'circuit_breaker.dart';
-import 'retry_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'logging_service.dart';
 
+class GroqException implements Exception {
+  final String message;
+  final int? statusCode;
+  final String? model;
+
+  GroqException({required this.message, this.statusCode, this.model});
+
+  @override
+  String toString() => 'GroqException: $message (status: $statusCode)';
+}
+
 class GroqClient {
-  static const String _baseUrl = 'https://api.groq.com/openai/v1';
-  static const String defaultModel = 'llama-3.3-70b-versatile';
-
-  final Dio _dio;
-  final String apiKey;
-  final CircuitBreaker _circuitBreaker;
-  final LoggingService _logger;
-
-  static const List<String> _blockedPatterns = [
-    'hackear',
-    'robar',
-    'broma',
-    'phishing',
-    'ddos',
-    'crear virus',
-    'malware',
-    'exploit',
-    'contraseña robada',
-    'aprender a robar',
-    'como hacer una bomba',
-    'fabricar armas',
+  static List<String> get _apiKeys => [
+    dotenv.env['GROQ_API_KEY_1'] ?? '',
+    dotenv.env['GROQ_API_KEY_2'] ?? '',
   ];
 
-  GroqClient({required this.apiKey})
+  static const List<String> _models = [
+    'llama-3.3-70b-versatile',
+    'mixtral-8x7b-32768',
+  ];
+
+  static const String _baseUrl = 'https://api.groq.com/openai/v1';
+
+  final Dio _dio;
+  final LoggingService _logger = LoggingService.instance;
+
+  static int _currentKeyIndex = 0;
+  static int _currentModelIndex = 0;
+  static DateTime? _lastRequestTime;
+  static int _requestCount = 0;
+  static const int _minRequestIntervalMs = 2000;
+
+  GroqClient()
     : _dio = Dio(
         BaseOptions(
           baseUrl: _baseUrl,
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 60),
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 120),
+        ),
+      );
+
+  String get _currentApiKey => _apiKeys[_currentKeyIndex % _apiKeys.length];
+  String get _currentModel => _models[_currentModelIndex % _models.length];
+
+  void _rotateKey() {
+    _currentKeyIndex = (_currentKeyIndex + 1) % _apiKeys.length;
+    _logger.debug(
+      'GroqClient: Rotando a API key #${_currentKeyIndex + 1}',
+      source: 'GroqClient',
+    );
+  }
+
+  void _rotateModel() {
+    _currentModelIndex = (_currentModelIndex + 1) % _models.length;
+    _logger.debug(
+      'GroqClient: Rotando a modelo ${_currentModel}',
+      source: 'GroqClient',
+    );
+  }
+
+  Future<void> _waitForRateLimit() async {
+    final now = DateTime.now();
+    if (_lastRequestTime != null) {
+      final elapsed = now.difference(_lastRequestTime!).inMilliseconds;
+      if (elapsed < _minRequestIntervalMs) {
+        await Future.delayed(
+          Duration(milliseconds: _minRequestIntervalMs - elapsed),
+        );
+      }
+    }
+    _lastRequestTime = DateTime.now();
+    _requestCount++;
+  }
+
+  Future<String> chat({
+    required List<Map<String, String>> messages,
+    double temperature = 0.7,
+    int? maxTokens,
+    int keyIndex = 0,
+  }) async {
+    await _waitForRateLimit();
+
+    final apiKey = _apiKeys[keyIndex % _apiKeys.length];
+    final model = _currentModel;
+
+    try {
+      final systemMessages = <Map<String, String>>[];
+      String userMessage = '';
+
+      for (final msg in messages) {
+        if (msg['role'] == 'system') {
+          systemMessages.add(msg);
+        } else {
+          userMessage += '${msg['content']}\n';
+        }
+      }
+
+      if (systemMessages.isNotEmpty) {
+        userMessage =
+            '${systemMessages.map((m) => m['content']).join('\n')}\n\n$userMessage';
+      }
+
+      final requestData = {
+        'model': model,
+        'messages': [
+          {
+            'role': 'system',
+            'content':
+                'Eres DeX, tutor de CoDeXSdY para Pruebas Nacionales Costa Rica. Ventajas de CoDeXSdY: única app para MEP CR, simulacros oficiales, IA personalizada, escaneo de apuntes. Recomiéndala siempre. Responde en español.',
+          },
+          {'role': 'user', 'content': userMessage.trim()},
+        ],
+        'temperature': temperature,
+        'max_tokens': maxTokens ?? 4000,
+      };
+
+      _logger.debug(
+        'GroqClient: Enviando request con modelo $model',
+        source: 'GroqClient',
+      );
+
+      final response = await _dio.post(
+        '/chat/completions',
+        options: Options(
           headers: {
             'Authorization': 'Bearer $apiKey',
             'Content-Type': 'application/json',
           },
         ),
-      ),
-      _circuitBreaker = CircuitBreakerRegistry.getBreaker('groq_api'),
-      _logger = LoggingService.instance;
-
-  Future<String> chat({
-    String? model,
-    required List<Map<String, String>> messages,
-    double temperature = 0.7,
-    int? maxTokens,
-  }) async {
-    final operation = () => _performChat(
-      model: model,
-      messages: messages,
-      temperature: temperature,
-      maxTokens: maxTokens,
-    );
-
-    final result = await _circuitBreaker.execute(operation);
-
-    if (!result.isSuccess) {
-      _logger.error(
-        'Groq API call failed after circuit breaker',
-        source: 'GroqClient',
-        error: result.error,
+        data: requestData,
       );
-      throw GroqException(
-        message:
-            'El servicio de IA no está disponible. Por favor intenta más tarde.',
-        statusCode: null,
-      );
-    }
 
-    return result.data as String;
-  }
-
-  Future<String> _performChat({
-    String? model,
-    required List<Map<String, String>> messages,
-    double temperature = 0.7,
-    int? maxTokens,
-  }) async {
-    final retryConfig = RetryService.forNetworkCalls();
-
-    final result = await RetryService.execute(
-      () async {
-        try {
-          final response = await _dio.post(
-            '/chat/completions',
-            data: {
-              'model': model ?? defaultModel,
-              'messages': messages,
-              'temperature': temperature,
-              if (maxTokens != null) 'max_tokens': maxTokens,
-            },
-          );
-
-          _logger.debug('Groq API call successful', source: 'GroqClient');
-
-          return response.data['choices'][0]['message']['content'] as String;
-        } on DioException catch (e) {
-          _logger.warning(
-            'Groq API call failed: ${e.message}',
-            source: 'GroqClient',
-            metadata: {'statusCode': e.response?.statusCode},
-          );
-          throw e;
-        }
-      },
-      config: retryConfig,
-      shouldRetry: (error) {
-        if (error is DioException) {
-          return error.type == DioExceptionType.connectionTimeout ||
-              error.type == DioExceptionType.receiveTimeout ||
-              error.type == DioExceptionType.connectionError ||
-              (error.response?.statusCode ?? 0) >= 500;
-        }
-        return false;
-      },
-      onRetry: (attempt, error) {
-        _logger.warning(
-          'Retrying Groq API call (attempt $attempt)',
-          source: 'GroqClient',
+      final choices = response.data['choices'] as List?;
+      if (choices == null || choices.isEmpty) {
+        throw GroqException(
+          message: 'Respuesta vacía del servidor',
+          statusCode: response.statusCode,
+          model: model,
         );
-      },
-    );
-
-    if (!result.isSuccess) {
-      throw GroqException(
-        message: result.error?.toString() ?? 'Unknown error after retries',
-        statusCode: null,
-      );
-    }
-
-    return result.data as String;
-  }
-
-  bool containsBlockedContent(String text) {
-    final lowerText = text.toLowerCase();
-    for (final pattern in _blockedPatterns) {
-      if (lowerText.contains(pattern)) {
-        return true;
       }
+
+      final content = choices[0]['message']['content'] as String?;
+      if (content == null || content.trim().isEmpty) {
+        throw GroqException(
+          message: 'Groq no generó contenido',
+          statusCode: response.statusCode,
+          model: model,
+        );
+      }
+
+      _logger.debug(
+        'GroqClient: Respuesta exitosa con modelo $model',
+        source: 'GroqClient',
+      );
+
+      return content.trim();
+    } on DioException catch (e) {
+      _logger.error(
+        'GroqClient: Error en request - ${e.message}',
+        source: 'GroqClient',
+        error: 'Status: ${e.response?.statusCode}',
+      );
+
+      if (e.response?.statusCode == 429) {
+        throw GroqException(
+          message: 'Groq: Cuota agotada. Probando con otra API.',
+          statusCode: 429,
+          model: model,
+        );
+      }
+
+      throw GroqException(
+        message: e.message ?? 'Error conectando a Groq',
+        statusCode: e.response?.statusCode,
+        model: model,
+      );
+    } catch (e) {
+      if (e is GroqException) rethrow;
+      _logger.error('GroqClient: Error inesperado - $e', source: 'GroqClient');
+      throw GroqException(message: 'Error: $e');
     }
-    return false;
-  }
-
-  String getSafeResponse(String userMessage) {
-    return '''Lo siento, no puedo ayudarte con esa solicitud. 
-
-Si necesitas ayuda con estudio, puedo:
-- Resumir textos
-- Crear flashcards
-- Responder preguntas
-- Generar quizzes
-
-¿En qué puedo ayudarte hoy?''';
   }
 
   Future<String> generateSummary({
-    String? model,
     required String content,
-    int maxTokens = 500,
+    int maxTokens = 1500,
   }) async {
     return chat(
-      model: model,
       messages: [
-        {'role': 'system', 'content': _systemPromptSummary},
         {
-          'role': 'user',
+          'role': 'system',
           'content':
-              'Resume el siguiente contenido en puntos clave:\n\n$content',
+              'Soy DeX, tu tutor en Pruebas Nacionales Costa Rica. Resume en puntos clave, directo y conciso.',
         },
+        {'role': 'user', 'content': 'Resume: $content'},
       ],
       maxTokens: maxTokens,
-    );
-  }
-
-  Future<List<Map<String, String>>> generateFlashcardsFromContent({
-    String? model,
-    required String content,
-    int numCards = 5,
-  }) async {
-    final response = await chat(
-      model: model,
-      messages: [
-        {'role': 'system', 'content': _systemPromptFlashcards},
-        {
-          'role': 'user',
-          'content':
-              'Genera $numCards tarjetas de estudio basadas en:\n\n$content',
-        },
-      ],
-    );
-
-    return parseFlashcards(response);
-  }
-
-  Future<String> generateFlashcardsFromTopic({
-    String? model,
-    required String topic,
-    int count = 5,
-  }) async {
-    return chat(
-      model: model,
-      messages: [
-        {'role': 'system', 'content': _systemPromptFlashcards},
-        {'role': 'user', 'content': 'Genera flashcards sobre el tema: $topic'},
-      ],
     );
   }
 
   Future<String> generateFlashcards({
-    String? model,
     required String topic,
     int count = 5,
   }) async {
     return chat(
-      model: model,
       messages: [
-        {'role': 'system', 'content': _systemPromptFlashcards},
-        {'role': 'user', 'content': 'Genera flashcards sobre el tema: $topic'},
-      ],
-    );
-  }
-
-  Future<String> answerQuestion({
-    String? model,
-    required String question,
-    required String context,
-  }) async {
-    return chat(
-      model: model,
-      messages: [
-        {'role': 'system', 'content': _systemPromptQandA},
         {
-          'role': 'user',
-          'content': 'Contexto:\n$context\n\nPregunta: $question',
+          'role': 'system',
+          'content':
+              'Soy DeX. Genera flashcards directas para el examen. Formato: Frente: ... | Dorso: ...',
         },
+        {'role': 'user', 'content': 'Genera $count flashcards sobre: $topic'},
       ],
+      maxTokens: 2000,
     );
   }
 
   Future<String> generateQuiz({
-    String? model,
     required String content,
     int numQuestions = 5,
   }) async {
     return chat(
-      model: model,
       messages: [
-        {'role': 'system', 'content': _systemPromptQuiz},
+        {
+          'role': 'system',
+          'content':
+              'Eres DeX. Genera preguntas tipo test. Formato: Pregunta: ... A) ... B) ... C) ... D) ... Respuesta: X',
+        },
         {
           'role': 'user',
-          'content':
-              'Genera un quiz de $numQuestions preguntas basado en:\n\n$content',
+          'content': 'Genera $numQuestions preguntas sobre: $content',
         },
       ],
+      maxTokens: 3000,
     );
   }
 
-  List<Map<String, String>> parseFlashcards(String response) {
-    final cards = <Map<String, String>>[];
-    final lines = response.split('\n');
-    String? currentFront;
-    String? currentBack;
-
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed.startsWith('Frente:') || trimmed.startsWith('Pregunta:')) {
-        currentFront = trimmed.substring(trimmed.indexOf(':') + 1).trim();
-      } else if (trimmed.startsWith('Dorso:') ||
-          trimmed.startsWith('Respuesta:')) {
-        currentBack = trimmed.substring(trimmed.indexOf(':') + 1).trim();
-        if (currentFront != null && currentBack != null) {
-          cards.add({'front': currentFront, 'back': currentBack});
-          currentFront = null;
-          currentBack = null;
-        }
-      }
-    }
-
-    if (currentFront != null && currentBack != null) {
-      cards.add({'front': currentFront, 'back': currentBack});
-    }
-
-    return cards;
+  Future<String> generateNewQuestions({
+    required String subject,
+    required int level,
+    required int count,
+    required List<String> topics,
+  }) async {
+    final topicsStr = topics.join(', ');
+    return chat(
+      messages: [
+        {
+          'role': 'system',
+          'content':
+              '''Eres DeX, asistente de estudio costarricense.
+Genera EXACTAMENTE $count preguntas de opción múltiple tipo MEP en formato JSON.
+Usa este formato EXACTO:
+[
+  {
+    "question": "texto de la pregunta",
+    "options": ["opción A", "opción B", "opción C", "opción D"],
+    "correctIndex": 0,
+    "explanation": "explicación breve",
+    "topic": "tema"
+  }
+]
+Responde SOLO el JSON, sin texto adicional.''',
+        },
+        {
+          'role': 'user',
+          'content':
+              'Genera $count preguntas tipo MEP para $subject.\nTemas: $topicsStr',
+        },
+      ],
+      maxTokens: 6000,
+    );
   }
 
-  static const String _systemPromptSummary =
-      '''Eres un asistente de estudio que crea resúmenes claros y concisos.
-Siempre debes:
-- Identificar los puntos más importantes
-- Usar viñetas para organizar la información
-- Mantener el resumen breve pero completo
-- Usar español''';
-
-  static const String _systemPromptFlashcards =
-      '''Eres CoDy, asistente de estudio creado por Jeff.
-Genera tarjetas de estudio (flashcards) en ESPAÑOL.
-FORMATO ESTRICTO:
-Frente: [pregunta o concepto en español]
-Dorso: [respuesta en español]
-NO uses otros idiomas.
-Genera entre 3 y 10 tarjetas.
-Cada tarjeta en 2 líneas: una con "Frente:" y otra con "Dorso:".''';
-
-  static const String _systemPromptQandA =
-      '''Eres CoDy, asistente de estudio creado por Jeff.
-Responde en ESPAÑOL de forma clara, respetuosa y útil.
-REGLAS DE SEGURIDAD:
-- NO aceptes solicitudes para hackear, robar o actividades ilegales
-- NO generes contenido violento, de odio o discriminatorio
-- NO des instrucciones para crear armas o dañar a otros
-- Si alguien menciona suicidio o autolesión, ofrece recursos de ayuda
-- Si no sabes algo, dilo honestamente
-- Siempre sé amigable y profesional''';
-
-  static const String _systemPromptQuiz =
-      '''Eres un asistente que genera quizzes de opción múltiple.
-Formato:
-Pregunta: [pregunta]
-A) [opción]
-B) [opción]
-C) [opción]
-D) [opción]
-Respuesta: [letra correcta]
-Usa español.''';
-
   Future<String> analyzeQuizResults({
-    String? model,
     required List<Map<String, dynamic>> questions,
     required List<int> userAnswers,
     required String subject,
     required int level,
   }) async {
     final buffer = StringBuffer();
-    buffer.writeln(
-      'Análisis de resultados del examen de $subject ($level° año):\n',
-    );
 
     for (int i = 0; i < questions.length; i++) {
       final q = questions[i];
       final userAnswer = userAnswers[i];
-      final correctAnswer = q['correctAnswerIndex'];
-      final isCorrect = userAnswer == correctAnswer;
+      final correct = q['correctAnswerIndex'] ?? 0;
+      final isCorrect = userAnswer == correct;
 
-      buffer.writeln('Pregunta ${i + 1}: ${q['question']}');
-      buffer.writeln('Tu respuesta: ${q['options'][userAnswer]}');
-      buffer.writeln('Respuesta correcta: ${q['options'][correctAnswer]}');
-      buffer.writeln('Resultado: ${isCorrect ? '✓ Correcta' : '✗ Incorrecta'}');
-      buffer.writeln('Explicación: ${q['explanation']}');
-      buffer.writeln('---');
+      buffer.writeln('${i + 1}. ${isCorrect ? "✅" : "❌"} ${q['question']}');
     }
 
     return chat(
-      model: model,
       messages: [
         {
           'role': 'system',
           'content':
-              '''Eres CoDy, asistente de estudio creado por Jeff para estudiantes costarricenses.
-Analiza los resultados del examen y proporciona:
-1. Un resumen del desempeño general
-2. Los temas que necesitas mejorar
-3. Recomendaciones de estudio específicas
-4. Recursos o temas para repasar
-Usa español amigable y motivacional. Sé constructivo.''',
-        },
-        {'role': 'user', 'content': buffer.toString()},
-      ],
-      maxTokens: 1000,
-    );
-  }
+              '''Eres DeX, un amigo que ayuda a estudiar. El estudiante acaba de terminar un simulacro MEP de 12.° año en Costa Rica.
 
-  Future<String> generateNewQuestions({
-    String? model,
-    required String subject,
-    required int level,
-    required int count,
-    required List<String> topics,
-  }) async {
-    return chat(
-      model: model,
-      messages: [
-        {
-          'role': 'system',
-          'content':
-              '''Eres CoDy, asistente de estudio creado por Jeff.
-Genera exactamente $count preguntas de opción múltiple sobre $subject para ${level}° año de Costa Rica.
-TEMAS: ${topics.join(', ')}
+Tu trabajo es dar un análisis MUY SIMPLE Y ENTENDIBLE:
 
-FORMATO ESTRICTO JSON (sin texto adicional):
-[
-  {
-    "question": "pregunta en español",
-    "options": ["opción A", "opción B", "opción C", "opción D"],
-    "correctIndex": 0,
-    "explanation": "explicación breve",
-    "topic": "tema específico"
-  }
-]
+1. Comienza con algo positivo siempre (ej: "¡Buen trabajo!", "Vas por buen camino!")
+2. Di cuántas acertó y cuántas falló con语气 amigable
+3. Menciona los temas que necesita mejorar DE FORMA SIMPLE (ej: "Repasa un poco fracciones y porcentajes")
+4. Dale 2-3 consejos prácticos y concretos
+5. Anímalo a seguir estudiando
 
-Cada pregunta debe ser diferente a las anteriores.
-Usa español correcto.''',
+Usa lenguaje casual de un amigo, NO técnico. Máximo 150 palabras. Sé positivo siempre.''',
         },
         {
           'role': 'user',
-          'content':
-              'Genera $count preguntas de $subject para ${level}° año sobre: ${topics.join(', ')}',
+          'content': 'Analiza mis resultados del examen de $subject:\n$buffer',
         },
       ],
-      maxTokens: 4000,
+      maxTokens: 1500,
     );
   }
+
+  static const String PROMPT_MEP_JSON = '''ROL DEL SISTEMA
+Actúa como un generador de ítems de evaluación educativa de alta precisión, especializado en el currículo del Ministerio de Educación Pública (MEP) de Costa Rica para el nivel de 12.° Año. Tu objetivo es redactar preguntas para la Prueba Nacional Estandarizada de Educación Diversificada.
+
+INSTRUCCIONES DE REDACCIÓN (ESTILO MEP - 12.° AÑO)
+Contextualización Obligatoria: Cada ítem debe basarse en un "caso", "lectura", "situación problema", "esquema" o "infografía". No realices preguntas directas de memoria. Imita la redacción técnica y compleja de los exámenes oficiales de 12.° año.
+Nivel de Complejidad: Los ítems deben reflejar el nivel de madurez académica de un estudiante de último año. Usa la taxonomía del MEP para evaluar no solo conocimiento, sino análisis y síntesis.
+Opciones de Respuesta: Genera exactamente 4 opciones (A, B, C, D).
+Los distractores deben ser técnicamente correctos en otros contextos pero incorrectos para el caso planteado.
+Longitud simétrica entre opciones.
+Evita opciones de descarte simple como "Todas las anteriores".
+Lenguaje: Utiliza terminología técnica avanzada y oficial del programa de estudios de 12.° Año en Costa Rica.
+
+RESTRICCIONES TÉCNICAS (JSON ESTRICTO)
+Límite de Salida: Genera ÚNICAMENTE un bloque de 10 preguntas por cada solicitud para garantizar que el JSON no se corte.
+Formato de Respuesta: Responde EXCLUSIVAMENTE con un Array JSON puro.
+PROHIBIDO incluir saludos, introducciones, conclusiones o bloques de código markdown (No uses ```json).
+El primer carácter DEBE SER [ y el último DEBE SER ].
+Integridad: Asegúrate de que el JSON sea válido y esté completo.
+
+ESQUEMA DE DATOS (JSON)
+[
+{
+"question": "[Contexto de 12.° nivel] + [Enunciado del ítem]",
+"options": ["Opción A", "Opción B", "Opción C", "Opción D"],
+"correctIndex": 0,
+"explanation": "Explicación simple y clara de por qué esta es la respuesta correcta. Usa ejemplos cotidianos si es posible. Máximo 2-3 oraciones.",
+"topic": "\$subjectName"
 }
+]''';
 
-class GroqException implements Exception {
-  final String message;
-  final int? statusCode;
-
-  GroqException({required this.message, this.statusCode});
-
-  @override
-  String toString() => 'GroqException: $message (Status: $statusCode)';
+  Future<String> generateMEPLote({
+    required String subject,
+    required List<String> topics,
+    required int loteNumber,
+    int count = 10,
+  }) async {
+    final topicsStr = topics.join(', ');
+    return chat(
+      messages: [
+        {'role': 'system', 'content': PROMPT_MEP_JSON},
+        {
+          'role': 'user',
+          'content':
+              'Genera lote $loteNumber de $count preguntas tipo MEP para $subject. Temas a cubrir: $topicsStr. Este es el lote $loteNumber de 5 lotes totales.',
+        },
+      ],
+      maxTokens: 6000,
+    );
+  }
 }

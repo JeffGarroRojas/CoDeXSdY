@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/database_service.dart';
-import 'core/services/tts_service.dart';
 import 'core/services/logging_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/services/update_service.dart';
@@ -30,11 +31,11 @@ void main() async {
     debugPrint('Firebase init error: $e');
   }
 
-  await LoggingService.instance.init();
   await DatabaseService.instance.init();
-  await TTSService.instance.init();
+  await LoggingService.instance.init();
   await NotificationService.instance.init();
   await NotificationService.instance.requestPermissions();
+  await UpdateService.instance.init();
 
   LoggingService.instance.info('CoDeXSdY started', source: 'App');
 
@@ -53,6 +54,30 @@ class CoDeXSdYApp extends ConsumerWidget {
       home: const SplashPage(),
     );
   }
+}
+
+class SplashPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF6366F1).withValues(alpha: 0.1)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(Offset(size.width * 0.1, size.height * 0.2), 80, paint);
+    canvas.drawCircle(Offset(size.width * 0.9, size.height * 0.3), 120, paint);
+    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.9), 150, paint);
+    canvas.drawCircle(Offset(size.width * 0.8, size.height * 0.7), 60, paint);
+
+    final paint2 = Paint()
+      ..color = const Color(0xFF22D3EE).withValues(alpha: 0.08)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(Offset(size.width * 0.3, size.height * 0.5), 100, paint2);
+    canvas.drawCircle(Offset(size.width * 0.7, size.height * 0.8), 80, paint2);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class SplashPage extends StatefulWidget {
@@ -82,10 +107,101 @@ class _SplashPageState extends State<SplashPage>
   }
 
   Future<void> _initializeAndNavigate() async {
-    await Future.delayed(const Duration(milliseconds: 2000));
+    await Future.delayed(const Duration(milliseconds: 3500));
     if (mounted) {
       _checkForUpdates();
     }
+  }
+
+  Widget _buildLoadingIndicator() {
+    return Column(
+      children: [
+        Container(
+              width: 200,
+              height: 6,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(3),
+                color: Colors.white.withValues(alpha: 0.1),
+              ),
+              child: AnimatedBuilder(
+                animation: _progressAnimation,
+                builder: (context, _) {
+                  return Stack(
+                    children: [
+                      Container(
+                        width: 200 * _progressAnimation.value,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(3),
+                          gradient: LinearGradient(
+                            colors: [
+                              const Color(0xFF6366F1),
+                              const Color(0xFF8B5CF6),
+                              const Color(0xFF22D3EE),
+                            ],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF6366F1,
+                              ).withValues(alpha: 0.5),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            )
+            .animate()
+            .fadeIn(delay: 500.ms, duration: 400.ms)
+            .shimmer(
+              delay: 1000.ms,
+              duration: 1500.ms,
+              color: Colors.white.withValues(alpha: 0.3),
+            ),
+        const SizedBox(height: 20),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildDot(0),
+            const SizedBox(width: 6),
+            _buildDot(1),
+            const SizedBox(width: 6),
+            _buildDot(2),
+          ],
+        ).animate().fadeIn(delay: 700.ms),
+      ],
+    );
+  }
+
+  Widget _buildDot(int index) {
+    return Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [const Color(0xFF6366F1), const Color(0xFF22D3EE)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6366F1).withValues(alpha: 0.5),
+                blurRadius: 8,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+        )
+        .animate(onPlay: (c) => c.repeat(reverse: true))
+        .fadeIn(
+          delay: Duration(milliseconds: 200 + (index * 150)),
+          duration: 600.ms,
+        );
   }
 
   Future<void> _checkForUpdates() async {
@@ -247,7 +363,23 @@ class _SplashPageState extends State<SplashPage>
         pageBuilder: (_, __, ___) => const AuthWrapper(),
         transitionDuration: const Duration(milliseconds: 800),
         transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
+          return FadeTransition(
+            opacity: animation,
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    const Color(0xFF6366F1),
+                    const Color(0xFF1E1E2E),
+                    const Color(0xFF0F0F1A),
+                  ],
+                ),
+              ),
+              child: FadeTransition(opacity: animation, child: child),
+            ),
+          );
         },
       ),
     );
@@ -265,111 +397,197 @@ class _SplashPageState extends State<SplashPage>
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
             colors: [
-              const Color(0xFF1E1B4B),
-              const Color(0xFF312E81),
-              Colors.black,
+              const Color(0xFF6366F1),
+              const Color(0xFF8B5CF6),
+              const Color(0xFF1E1E2E),
+              const Color(0xFF0F0F1A),
             ],
-            stops: const [0.0, 0.3, 1.0],
+            stops: const [0.0, 0.3, 0.7, 1.0],
           ),
         ),
         child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Stack(
             children: [
-              const Spacer(flex: 2),
-              CircularAnimatedBorder(
-                    size: 130,
-                    color1: const Color(0xFF007AFF),
-                    color2: const Color(0xFF6F42C1),
-                    child: Image.asset(
-                      'assets/logonuevo.png',
-                      fit: BoxFit.contain,
-                    ),
-                  )
-                  .animate()
-                  .fadeIn(duration: 500.ms, curve: Curves.easeOut)
-                  .scale(
-                    begin: const Offset(0.8, 0.8),
-                    end: const Offset(1, 1),
-                    duration: 500.ms,
-                    curve: Curves.elasticOut,
-                  ),
-              const SizedBox(height: 24),
-              Text(
-                    'CoDeXSdY',
-                    style: TextStyle(
-                      fontFamily: 'Aquire',
-                      fontSize: 42,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      letterSpacing: 2,
-                      shadows: [
-                        Shadow(
-                          color: Colors.black.withValues(alpha: 0.5),
-                          blurRadius: 10,
-                        ),
+              Positioned.fill(
+                child: Stack(
+                  children: [
+                    Container(
+                          decoration: BoxDecoration(
+                            gradient: RadialGradient(
+                              center: const Alignment(-0.5, -0.5),
+                              radius: 1.2,
+                              colors: [
+                                const Color(0xFF22D3EE).withValues(alpha: 0.2),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        )
+                        .animate(onPlay: (c) => c.repeat(reverse: true))
+                        .fadeIn(begin: 0.5, duration: 2000.ms),
+                    Container(
+                          decoration: BoxDecoration(
+                            gradient: RadialGradient(
+                              center: const Alignment(0.8, 0.8),
+                              radius: 1.0,
+                              colors: [
+                                const Color(0xFF6366F1).withValues(alpha: 0.15),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        )
+                        .animate(onPlay: (c) => c.repeat(reverse: true))
+                        .fadeIn(begin: 0.3, duration: 2500.ms),
+                  ],
+                ),
+              ),
+              Column(
+                children: [
+                  const Spacer(flex: 3),
+                  Center(
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Container(
+                              width: 220,
+                              height: 220,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: RadialGradient(
+                                  colors: [
+                                    const Color(
+                                      0xFF22D3EE,
+                                    ).withValues(alpha: 0.2),
+                                    const Color(
+                                      0xFF6366F1,
+                                    ).withValues(alpha: 0.1),
+                                    Colors.transparent,
+                                  ],
+                                ),
+                              ),
+                            )
+                            .animate(onPlay: (c) => c.repeat(reverse: true))
+                            .scale(
+                              begin: const Offset(0.7, 0.7),
+                              end: const Offset(1.2, 1.2),
+                              duration: 1800.ms,
+                            ),
+                        Container(
+                              width: 170,
+                              height: 170,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: RadialGradient(
+                                  colors: [
+                                    const Color(
+                                      0xFF6366F1,
+                                    ).withValues(alpha: 0.3),
+                                    const Color(
+                                      0xFF8B5CF6,
+                                    ).withValues(alpha: 0.1),
+                                    Colors.transparent,
+                                  ],
+                                ),
+                              ),
+                            )
+                            .animate(onPlay: (c) => c.repeat(reverse: true))
+                            .scale(
+                              begin: const Offset(0.9, 0.9),
+                              end: const Offset(1.1, 1.1),
+                              duration: 1500.ms,
+                            ),
+                        Container(
+                              width: 130,
+                              height: 130,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(30),
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    const Color(0xFF6366F1),
+                                    const Color(0xFF8B5CF6),
+                                  ],
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF6366F1,
+                                    ).withValues(alpha: 0.5),
+                                    blurRadius: 30,
+                                    spreadRadius: 10,
+                                  ),
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF22D3EE,
+                                    ).withValues(alpha: 0.3),
+                                    blurRadius: 50,
+                                    spreadRadius: 20,
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(30),
+                                child: Image.asset(
+                                  'assets/logonuevo.png',
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            )
+                            .animate()
+                            .fadeIn(duration: 800.ms)
+                            .scale(
+                              begin: const Offset(0.5, 0.5),
+                              end: const Offset(1, 1),
+                              duration: 800.ms,
+                              curve: Curves.elasticOut,
+                            ),
                       ],
                     ),
-                  )
-                  .animate()
-                  .fadeIn(
-                    delay: 200.ms,
-                    duration: 600.ms,
-                    curve: Curves.easeOut,
-                  )
-                  .slideY(
-                    begin: -0.3,
-                    end: 0,
-                    duration: 600.ms,
-                    curve: Curves.easeOut,
                   ),
-              const SizedBox(height: 8),
-              Text(
-                'Tu asistente de estudio',
-                style: TextStyle(
-                  fontFamily: 'Aquire',
-                  fontSize: 14,
-                  fontWeight: FontWeight.w300,
-                  color: Colors.white.withValues(alpha: 0.8),
-                  letterSpacing: 1,
-                ),
-              ).animate().fadeIn(delay: 400.ms, duration: 400.ms),
-              const Spacer(flex: 1),
-              SizedBox(
-                width: 200,
-                child: AnimatedBuilder(
-                  animation: _progressAnimation,
-                  builder: (context, _) {
-                    return Container(
-                      height: 4,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(2),
-                        color: Colors.white.withValues(alpha: 0.3),
-                      ),
-                      child: FractionallySizedBox(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: _progressAnimation.value,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(2),
-                            color: Colors.white,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.white.withValues(alpha: 0.5),
-                                blurRadius: 10,
-                              ),
-                            ],
-                          ),
+                  const SizedBox(height: 32),
+                  const Text(
+                        'CoDeXSdY',
+                        style: TextStyle(
+                          fontFamily: 'Aquire',
+                          fontSize: 42,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 2,
                         ),
+                      )
+                      .animate()
+                      .fadeIn(
+                        delay: 300.ms,
+                        duration: 600.ms,
+                        curve: Curves.easeOut,
+                      )
+                      .slideY(
+                        begin: -0.3,
+                        end: 0,
+                        duration: 600.ms,
+                        curve: Curves.easeOut,
                       ),
-                    );
-                  },
-                ),
-              ).animate().fadeIn(delay: 600.ms, duration: 400.ms),
-              const SizedBox(height: 60),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Tu asistente de estudio con IA',
+                    style: TextStyle(
+                      fontFamily: 'Aquire',
+                      fontSize: 16,
+                      fontWeight: FontWeight.w300,
+                      color: Colors.white.withValues(alpha: 0.9),
+                      letterSpacing: 1.5,
+                    ),
+                  ).animate().fadeIn(delay: 500.ms, duration: 500.ms),
+                  const Spacer(flex: 2),
+                  _buildLoadingIndicator(),
+                  const Spacer(flex: 1),
+                ],
+              ),
             ],
           ),
         ),
@@ -413,13 +631,28 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
   void _handleLogin() {
     ref.read(currentUserIdProvider.notifier).state = 'authenticated';
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => const MainNavigationPage(isGuestMode: false),
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const MainNavigationPage(isGuestMode: false),
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.95, end: 1.0).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              ),
+              child: child,
+            ),
+          );
+        },
       ),
     );
   }
 
-  void _handleGuestMode() {
+  Future<void> _handleGuestMode() async {
+    await FirebaseAuth.instance.signOut();
     final guestId = 'guest_${DateTime.now().millisecondsSinceEpoch}';
     ref.read(currentUserIdProvider.notifier).state = guestId;
     DatabaseService.instance.setGuestUserId(guestId);
@@ -428,7 +661,23 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
     NotificationService.instance.scheduleGuestReminder(daysRemaining: 4);
 
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => MainNavigationPage(isGuestMode: true)),
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            MainNavigationPage(isGuestMode: true),
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.95, end: 1.0).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              ),
+              child: child,
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -449,52 +698,13 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
   }
 }
 
-class MainNavigationPage extends StatefulWidget {
+class MainNavigationPage extends StatelessWidget {
   final bool isGuestMode;
 
   const MainNavigationPage({super.key, this.isGuestMode = false});
 
   @override
-  State<MainNavigationPage> createState() => _MainNavigationPageState();
-}
-
-class _MainNavigationPageState extends State<MainNavigationPage> {
-  int _currentIndex = 0;
-
-  final _pages = const [HomePage(), StudyPage(), ChatbotPage(), ProfilePage()];
-
-  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() => _currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Inicio',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.school_outlined),
-            selectedIcon: Icon(Icons.school),
-            label: 'Estudiar',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.chat_outlined),
-            selectedIcon: Icon(Icons.chat),
-            label: 'CoDy',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outlined),
-            selectedIcon: Icon(Icons.person),
-            label: 'Perfil',
-          ),
-        ],
-      ),
-    );
+    return const MainShell();
   }
 }

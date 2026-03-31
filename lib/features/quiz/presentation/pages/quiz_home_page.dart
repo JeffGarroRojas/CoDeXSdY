@@ -1,12 +1,91 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../../../core/theme/app_theme.dart';
-import 'mep_exam_page.dart';
-import 'quiz_practice_page.dart';
+import 'quiz_session_page.dart';
 import 'quiz_history_page.dart';
 
-class QuizHomePage extends StatelessWidget {
+class QuizHomePage extends StatefulWidget {
   const QuizHomePage({super.key});
+
+  @override
+  State<QuizHomePage> createState() => _QuizHomePageState();
+}
+
+class _QuizHomePageState extends State<QuizHomePage> {
+  final List<Map<String, dynamic>> _subjects = [
+    {
+      'name': 'Matemáticas',
+      'icon': Icons.calculate,
+      'color': Colors.blue,
+      'questions': 50,
+      'minutes': 90,
+      'topics': [
+        'Conjuntos numéricos',
+        'Expresiones algebraicas',
+        'Ecuaciones',
+        'Proporcionalidad',
+        'Porcentajes',
+        'Figuras planas',
+        'Perímetro y área',
+        'Trigonometría',
+        'Probabilidad',
+        'Funciones',
+      ],
+    },
+    {
+      'name': 'Ciencias',
+      'icon': Icons.science,
+      'color': Colors.green,
+      'questions': 50,
+      'minutes': 90,
+      'topics': [
+        'Célula',
+        'Fotosíntesis',
+        'Genética',
+        'Evolución',
+        'Ecosistemas',
+        'Materia',
+        'Átomo',
+        'Reacciones químicas',
+        'Movimiento',
+        'Electricidad',
+      ],
+    },
+    {
+      'name': 'Estudios Sociales',
+      'icon': Icons.public,
+      'color': Colors.brown,
+      'questions': 50,
+      'minutes': 90,
+      'topics': [
+        'Independencia CR',
+        'Formación República',
+        'Constitución 1949',
+        'Derechos humanos',
+        'Democracia',
+        'Geografía CR',
+        'Economía',
+        'Globalización',
+      ],
+    },
+    {
+      'name': 'Español',
+      'icon': Icons.menu_book,
+      'color': Colors.red,
+      'questions': 50,
+      'minutes': 90,
+      'topics': [
+        'Gramática',
+        'Ortografía',
+        'Literatura',
+        'Narrativa',
+        'Poesía',
+        'Texto argumentativo',
+        'Comprensión lectora',
+        'Redacción',
+      ],
+    },
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -34,8 +113,6 @@ class QuizHomePage extends StatelessWidget {
             _buildHeader(),
             const SizedBox(height: 24),
             _buildMepExams(context),
-            const SizedBox(height: 24),
-            _buildQuickPractice(context),
           ],
         ),
       ),
@@ -91,143 +168,45 @@ class QuizHomePage extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          '📝 Pruebas Estandarizadas MEP',
+          '📝 Simulacros MEP',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
         Text(
-          'Exámenes basados en el pénsum oficial del MEP - 3° Bachillerato',
+          '50 preguntas por materia - Generadas con IA',
           style: TextStyle(color: Colors.grey[500]),
         ),
         const SizedBox(height: 16),
-        _buildExamCard(
-          context,
-          title: '12° Año (3° Bachillerato)',
-          subtitle:
-              'Pruebas Estandarizadas - Matemáticas, Ciencias, Estudios Sociales, Español',
-          icon: Icons.school,
-          color: Colors.orange,
-          levelIndex: 0,
-        ).animate().fadeIn(delay: 100.ms).slideX(begin: -0.1),
+        ...List.generate(_subjects.length, (index) {
+          final subject = _subjects[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildSubjectCard(context, subject, index),
+          ).animate().fadeIn(delay: Duration(milliseconds: 100 * index));
+        }),
       ],
     );
   }
 
-  Widget _buildExamCard(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-    required int levelIndex,
-  }) {
+  Widget _buildSubjectCard(
+    BuildContext context,
+    Map<String, dynamic> subject,
+    int index,
+  ) {
     return InkWell(
       onTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => MEPExamPage(levelIndex: levelIndex),
+            builder: (_) => QuizSessionPage(
+              levelIndex: 0,
+              subjectName: subject['name'] as String,
+              subjectIndex: index,
+              questionCount: subject['questions'] as int,
+              durationMinutes: subject['minutes'] as int,
+              topics: subject['topics'] as List<String>,
+            ),
           ),
-        );
-      },
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppTheme.cardColor,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: color, size: 28),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: TextStyle(color: Colors.grey[500], fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_forward_ios, color: Colors.grey[600], size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuickPractice(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          '🎯 Práctica Rápida',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Pon a prueba tus conocimientos con preguntas aleatorias',
-          style: TextStyle(color: Colors.grey[500]),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: _buildPracticeCard(
-                context,
-                title: 'Por Tema',
-                subtitle: 'Elige una materia',
-                icon: Icons.category,
-                color: Colors.teal,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildPracticeCard(
-                context,
-                title: 'Aleatorio',
-                subtitle: 'Preguntas variadas',
-                icon: Icons.shuffle,
-                color: Colors.pink,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ).animate().fadeIn(delay: 400.ms);
-  }
-
-  Widget _buildPracticeCard(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-  }) {
-    return InkWell(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const QuizPracticePage()),
         );
       },
       borderRadius: BorderRadius.circular(16),
@@ -236,18 +215,48 @@ class QuizHomePage extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppTheme.cardColor,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+          border: Border.all(
+            color: (subject['color'] as Color).withValues(alpha: 0.3),
+          ),
         ),
-        child: Column(
+        child: Row(
           children: [
-            Icon(icon, color: color, size: 32),
-            const SizedBox(height: 8),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: TextStyle(color: Colors.grey[500], fontSize: 12),
-              textAlign: TextAlign.center,
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: (subject['color'] as Color).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                subject['icon'] as IconData,
+                color: subject['color'] as Color,
+                size: 28,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    subject['name'] as String,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '50 preguntas • 90 minutos',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.play_circle_fill,
+              color: subject['color'] as Color,
+              size: 36,
             ),
           ],
         ),

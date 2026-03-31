@@ -1,16 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../../core/services/tts_service.dart';
 import '../../../../core/services/database_service.dart';
-import '../../../../core/services/curriculum_service.dart';
+import '../../../../core/services/pdf_generator_service.dart';
 import '../../data/models/question.dart';
 import '../../../../core/providers/app_providers.dart';
 
@@ -48,6 +43,8 @@ class _QuizSessionPageState extends ConsumerState<QuizSessionPage> {
   final List<int> _userAnswers = [];
   final List<bool> _usedHint = [];
   final List<int?> _eliminatedOptions = [];
+  final List<int> _questionTimes = [];
+  int _questionStartTime = 0;
   bool _examFinished = false;
   bool _isAnalyzing = false;
   String? _aiAnalysis;
@@ -58,26 +55,27 @@ class _QuizSessionPageState extends ConsumerState<QuizSessionPage> {
   Timer? _loadingTimer;
   int _loadingIndex = 0;
   bool _isLoading = true;
-  String _loadingMessage = 'CoDy está generando el examen...';
+  String _loadingMessage = 'DeX está generando el examen...';
   bool _isGeneratingPDF = false;
   String _pdfMessage = 'Generando resumen...';
 
   @override
   void initState() {
     super.initState();
-    _remainingSeconds = widget.durationMinutes * 60;
+    final timePerQuestion = 1.8;
+    _remainingSeconds = (widget.questionCount * timePerQuestion * 60).round();
     _generateExamWithAI();
   }
 
   Future<void> _generateExamWithAI() async {
-    final groqClient = ref.read(groqClientProvider);
+    final aiClient = ref.read(aiClientProvider);
 
-    if (groqClient == null) {
+    if (aiClient == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'CoDy no está disponible. Cargando preguntas locales...',
+              'DeX no está disponible. Cargando preguntas locales...',
             ),
             backgroundColor: Colors.orange,
           ),
@@ -90,39 +88,42 @@ class _QuizSessionPageState extends ConsumerState<QuizSessionPage> {
     setState(() {
       _isLoading = true;
       _loadingMessage =
-          'CoDy está generando el examen de ${widget.subjectName}...';
+          'DeX está generando el examen de ${widget.subjectName}...';
     });
 
     _showLoadingDialog();
 
     try {
-      final topicText = widget.topics.join(', ');
-      final levelText = _getLevelText();
-      final systemPrompt = _getSystemPrompt();
+      final allQuestions = <Question>[];
+      const totalLotes = 5;
+      const preguntasPorLote = 10;
 
-      final response = await groqClient
-          .chat(
-            messages: [
-              {'role': 'system', 'content': systemPrompt},
-              {
-                'role': 'user',
-                'content':
-                    'Genera un examen de ${widget.subjectName} para $levelText con ${widget.questionCount} preguntas basadas en el pénsum del MEP de Costa Rica. Temas a cubrir: $topicText',
-              },
-            ],
-            maxTokens: 12000,
-          )
-          .timeout(const Duration(seconds: 150));
+      for (int lote = 1; lote <= totalLotes; lote++) {
+        setState(() {
+          _loadingMessage =
+              'Generando lote $lote/$totalLotes de $preguntasPorLote preguntas...';
+        });
+
+        final response = await aiClient
+            .generateMEPLote(
+              subject: widget.subjectName,
+              topics: widget.topics,
+              loteNumber: lote,
+              count: preguntasPorLote,
+            )
+            .timeout(const Duration(seconds: 180));
+
+        final loteQuestions = _parseJSONQuestions(response);
+        allQuestions.addAll(loteQuestions);
+      }
 
       if (mounted) {
         Navigator.pop(context);
       }
 
-      final generatedQuestions = _parseGeneratedQuestions(response);
-
-      if (generatedQuestions.isNotEmpty) {
+      if (allQuestions.isNotEmpty) {
         setState(() {
-          _questions = generatedQuestions;
+          _questions = allQuestions;
           _isLoading = false;
         });
         _initializeExam();
@@ -131,7 +132,7 @@ class _QuizSessionPageState extends ConsumerState<QuizSessionPage> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                '¡Examen generado! ${generatedQuestions.length} preguntas listas',
+                '¡Examen generado! ${allQuestions.length} preguntas listas',
               ),
               backgroundColor: Colors.green,
             ),
@@ -146,91 +147,61 @@ class _QuizSessionPageState extends ConsumerState<QuizSessionPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Error al generar: $e. Cargando preguntas locales...',
+              'Error: ${e.toString().replaceAll("Exception: ", "")}. Usando preguntas locales.',
             ),
             backgroundColor: Colors.red,
           ),
         );
-        _loadLocalQuestions();
       }
+      _loadLocalQuestions();
     }
   }
 
-  String _getSystemPrompt() {
-    String basePrompt =
-        '''Eres CoDy, asistente de estudio costarricense especializado en preparar estudiantes para las pruebas nacionales del MEP.
+  List<Question> _parseJSONQuestions(String response) {
+    final questions = <Question>[];
 
-IMPORTANTE: Genera preguntas basadas en el pénsum oficial del Ministerio de Educación Pública de Costa Rica.
+    try {
+      final jsonStart = response.indexOf('[');
+      final jsonEnd = response.lastIndexOf(']') + 1;
 
-REGLAS OBLIGATORIAS:
-1. Genera EXACTAMENTE ${widget.questionCount} preguntas de opción múltiple
-2. Cada pregunta debe tener exactamente 4 opciones (A, B, C, D)
-3. Indica claramente cuál es la respuesta correcta
-4. Incluye una explicación pedagógica de por qué es correcta
-5. Distribuye las preguntas equitativamente entre los temas
-6. Usa español costarricense correcto
-7. Las preguntas deben ser desafiantes y apropiadas para el nivel
-8. NO repitas preguntas de exámenes anteriores
-9. Sigue la estructura y dificultad del MEP
+      if (jsonStart == -1 || jsonEnd == 0) {
+        debugPrint('No se encontró JSON válido en la respuesta');
+        return [];
+      }
 
-FORMATO ESTRICTO POR PREGUNTA:
-Pregunta: [texto claro y completo de la pregunta]
-A) [primera opción]
-B) [segunda opción]
-C) [tercera opción]
-D) [cuarta opción]
-Respuesta: [letra de la respuesta correcta]
-Explicación: [explicación pedagógica de 1-2 oraciones]
----
-''';
+      final jsonStr = response.substring(jsonStart, jsonEnd);
+      final data = json.decode(jsonStr) as List;
 
-    if (widget.subjectName == 'Matemáticas') {
-      basePrompt += '''
-DISTRIBUCIÓN DE CONTENIDOS MATEMÁTICAS:
-- Razonamiento numérico: 20% (conjuntos numéricos, operaciones, porcentajes)
-- Razonamiento geométrico: 25% (figuras, áreas, volúmenes, trigonometría)
-- Razonamiento estadístico: 20% (media, mediana, moda, probabilidad)
-- Relaciones y funciones: 35% (ecuaciones, funciones, polinomios)
-''';
-    } else if (widget.subjectName == 'Ciencias') {
-      basePrompt += '''
-DISTRIBUCIÓN DE CONTENIDOS DE CIENCIAS:
-- Biología: células, genética, evolución, ecosistemas
-- Química: materia, átomo, enlaces, reacciones
-- Física: movimiento, fuerzas, energía, ondas
-''';
-    } else if (widget.subjectName == 'Estudios Sociales') {
-      basePrompt += '''
-DISTRIBUCIÓN DE CONTENIDOS DE ESTUDIOS SOCIALES:
-- Historia de Costa Rica: independencia, república, figuras históricas
-- Geografía: territorio, regiones, recursos
-- Cívica: derechos, deberes, democracia, constitución
-- Economía: comercio, globalización, desarrollo
-''';
-    } else if (widget.subjectName == 'Español') {
-      basePrompt += '''
-DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
-- Gramática: sustantivos, verbos, sintaxis
-- Ortografía: tildes, reglas, signos
-- Literatura: géneros, figuras retóricas, comprensión
-- Redacción: coherencia, cohesión, texto argumentativo
-''';
+      for (int i = 0; i < data.length; i++) {
+        final item = data[i] as Map<String, dynamic>;
+        final options = List<String>.from(item['options'] ?? []);
+
+        if (options.length < 4) {
+          while (options.length < 4) {
+            options.add('Opción adicional');
+          }
+        }
+
+        questions.add(
+          Question.create(
+            odId: 'mep_${DateTime.now().microsecondsSinceEpoch}_$i',
+            question: item['question'] ?? '',
+            options: options.take(4).toList(),
+            correctAnswerIndex: (item['correctIndex'] ?? 0).clamp(0, 3),
+            explanation: item['explanation'] ?? 'Respuesta correcta.',
+            categoryIndex: widget.subjectIndex,
+            levelIndex: 2,
+            topic: item['topic'] ?? widget.subjectName,
+          ),
+        );
+      }
+
+      debugPrint('Parsed ${questions.length} preguntas del JSON');
+    } catch (e) {
+      debugPrint('Error parseando JSON: $e');
     }
 
-    return basePrompt;
-  }
-
-  String _getLevelText() {
-    switch (widget.levelIndex) {
-      case 0:
-        return '10° Año (1° Bachillerato)';
-      case 1:
-        return '11° Año (2° Bachillerato)';
-      case 2:
-        return '12° Año (3° Bachillerato)';
-      default:
-        return '${widget.levelIndex + 10}° Año';
-    }
+    return questions;
   }
 
   void _showLoadingDialog() {
@@ -282,7 +253,7 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Esto puede tardar entre 30 segundos y 2 minutos',
+                      'Máximo 2 minutos',
                       style: TextStyle(color: Colors.grey[400], fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
@@ -296,126 +267,6 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
         ),
       );
     });
-  }
-
-  List<Question> _parseGeneratedQuestions(String response) {
-    final questions = <Question>[];
-    int questionCount = 0;
-
-    response = response.trim();
-
-    final blocks = response.split(RegExp(r'---+\s*'));
-
-    for (final block in blocks) {
-      if (block.trim().isEmpty) continue;
-
-      final lines = block.split('\n');
-      String questionText = '';
-      List<String> options = [];
-      int correctIndex = 0;
-      String explanation = '';
-
-      for (final line in lines) {
-        final trimmed = line.trim();
-        if (trimmed.isEmpty) continue;
-
-        if (trimmed.toLowerCase().startsWith('pregunta')) {
-          questionText = trimmed.replaceFirst(
-            RegExp(r'pregunta\s*\d*\s*[:\.\)]*\s*', caseSensitive: false),
-            '',
-          );
-        } else if (RegExp(r'^[a]\)').hasMatch(trimmed)) {
-          options.add(trimmed.substring(2).trim());
-        } else if (RegExp(r'^[b]\)').hasMatch(trimmed)) {
-          options.add(trimmed.substring(2).trim());
-        } else if (RegExp(r'^[c]\)').hasMatch(trimmed)) {
-          options.add(trimmed.substring(2).trim());
-        } else if (RegExp(r'^[d]\)').hasMatch(trimmed)) {
-          options.add(trimmed.substring(2).trim());
-        } else if (trimmed.toLowerCase().contains('respuesta') ||
-            trimmed.toLowerCase().contains('correcta')) {
-          correctIndex = _parseAnswer(trimmed);
-        } else if (trimmed.toLowerCase().contains('explicaci')) {
-          explanation = trimmed.replaceFirst(
-            RegExp(r'(explicaci[oó]n\s*[:\.\)]*\s*)', caseSensitive: false),
-            '',
-          );
-        }
-      }
-
-      if (questionText.isNotEmpty && options.length >= 4) {
-        questions.add(
-          Question.create(
-            odId: 'ai_${DateTime.now().microsecondsSinceEpoch}_$questionCount',
-            question: questionText,
-            options: options.take(4).toList(),
-            correctAnswerIndex: correctIndex.clamp(0, 3),
-            explanation: explanation.isEmpty
-                ? 'Respuesta correcta.'
-                : explanation,
-            categoryIndex: widget.subjectIndex,
-            levelIndex: widget.levelIndex,
-            topic: widget.topics[questionCount % widget.topics.length],
-          ),
-        );
-        questionCount++;
-      }
-    }
-
-    return questions;
-  }
-
-  int _parseAnswer(String line) {
-    final upper = line.toUpperCase();
-    final words = upper.split(RegExp(r'\s+'));
-
-    for (final word in words) {
-      if (word == 'A)' || word == 'A:' || word == 'A.') return 0;
-      if (word == 'B)' || word == 'B:' || word == 'B.') return 1;
-      if (word == 'C)' || word == 'C:' || word == 'C.') return 2;
-      if (word == 'D)' || word == 'D:' || word == 'D.') return 3;
-    }
-
-    if (RegExp(r'\bA\b(?!.*[BCD])\b').hasMatch(upper)) return 0;
-    if (RegExp(r'\bB\b(?!.*[CD])\b').hasMatch(upper) && !upper.contains('A'))
-      return 1;
-    if (RegExp(r'\bC\b(?!.*[D])\b').hasMatch(upper) &&
-        !upper.contains('A') &&
-        !upper.contains('B'))
-      return 2;
-    if (upper.contains('D') &&
-        !upper.contains('A') &&
-        !upper.contains('B') &&
-        !upper.contains('C'))
-      return 3;
-
-    return 0;
-  }
-
-  void _addParsedQuestion(
-    List<Question> questions,
-    String questionText,
-    List<String> options,
-    int correctIndex,
-    String explanation,
-    int index,
-  ) {
-    if (questionText.isEmpty || options.length < 4) return;
-
-    questions.add(
-      Question.create(
-        odId: 'ai_${DateTime.now().microsecondsSinceEpoch}_$index',
-        question: questionText.trim(),
-        options: options.take(4).toList(),
-        correctAnswerIndex: correctIndex.clamp(0, 3),
-        explanation: explanation.isEmpty
-            ? 'Respuesta correcta.'
-            : explanation.trim(),
-        categoryIndex: widget.subjectIndex,
-        levelIndex: widget.levelIndex,
-        topic: widget.topics[index % widget.topics.length],
-      ),
-    );
   }
 
   void _loadLocalQuestions() {
@@ -439,22 +290,6 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
       _eliminatedOptions.add(null);
     }
     _startTimer();
-  }
-
-  void _loadQuestions() {
-    _questions = _generateQuestions();
-    _questions.shuffle();
-    if (_questions.length > widget.questionCount) {
-      _questions = _questions.sublist(0, widget.questionCount);
-    }
-    for (int i = 0; i < _questions.length; i++) {
-      _usedHint.add(false);
-      _eliminatedOptions.add(null);
-    }
-  }
-
-  List<Question> _generateQuestions() {
-    return _getQuestionsForSubject(widget.subjectIndex, widget.levelIndex);
   }
 
   void _startTimer() {
@@ -629,7 +464,7 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 40),
                 child: Text(
-                  'CoDy está creando ${widget.questionCount} preguntas sobre ${widget.subjectName}',
+                  'DeX está creando ${widget.questionCount} preguntas sobre ${widget.subjectName}',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey[400]),
                 ),
@@ -803,11 +638,6 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
                   onPressed: _useHint,
                   tooltip: 'Usar pista (-0.5 punto)',
                 ),
-              IconButton(
-                icon: const Icon(Icons.volume_up),
-                onPressed: () => TTSService.instance.speak(question.question),
-                tooltip: 'Escuchar pregunta',
-              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -1027,75 +857,673 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
   }
 
   Widget _buildResultsPage() {
-    final adjustedCorrect = _correctAnswers - (_hintedCorrectAnswers * 0.5);
-    final percentage = (adjustedCorrect / _questions.length * 100).round();
-    final passed = percentage >= 70;
-    final incorrectCount = _questions.length - _correctAnswers;
+    final percentage = (_correctAnswers / _questions.length * 100).round();
+    final topicStats = _calculateTopicStats();
+    final timeStats = _calculateTimeStats();
 
     return Scaffold(
+      backgroundColor: const Color(0xFF0f111a),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              const SizedBox(height: 40),
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: passed
-                      ? Colors.green.withValues(alpha: 0.2)
-                      : Colors.red.withValues(alpha: 0.2),
-                ),
-                child: Icon(
-                  passed ? Icons.celebration : Icons.sentiment_dissatisfied,
-                  size: 80,
-                  color: passed ? Colors.green : Colors.red,
-                ),
-              ).animate().scale(),
+              const SizedBox(height: 20),
+              _buildThermometerGauge(percentage),
               const SizedBox(height: 24),
-              Text(
-                passed ? '¡Felicidades!' : 'Sigue intentando',
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                ),
-              ).animate().fadeIn(delay: 200.ms),
-              const SizedBox(height: 8),
-              Text(
-                passed
-                    ? 'Has aprobado el examen'
-                    : 'Necesitas 70% para aprobar',
-                style: TextStyle(fontSize: 16, color: Colors.grey[400]),
-              ).animate().fadeIn(delay: 300.ms),
-              const SizedBox(height: 40),
-              _buildScoreCard(percentage),
+              _buildMessageByPercentage(percentage),
               const SizedBox(height: 24),
-              _buildStats(),
+              _buildTimeComparison(timeStats),
+              const SizedBox(height: 24),
+              _buildTopicBreakdown(topicStats),
               const SizedBox(height: 24),
               if (_isAnalyzing)
                 _buildLoadingCard(_analyzingMessage)
               else if (_aiAnalysis != null)
-                _buildAIAnalysisCard(),
-              const SizedBox(height: 16),
-              _buildActionButtons(passed, incorrectCount),
+                _buildAIAnalysisCard()
+              else
+                _buildDeXActionCard(topicStats),
+              const SizedBox(height: 24),
+              _buildResultsActions(),
               const SizedBox(height: 40),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('Volver al inicio'),
-                ),
-              ).animate().fadeIn(delay: 800.ms),
             ],
           ),
         ),
       ),
     );
   }
+
+  Widget _buildThermometerGauge(int percentage) {
+    Color gaugeColor;
+    String status;
+    IconData statusIcon;
+
+    if (percentage < 60) {
+      gaugeColor = Colors.red;
+      status = 'Alerta';
+      statusIcon = Icons.warning_rounded;
+    } else if (percentage < 80) {
+      gaugeColor = Colors.amber;
+      status = 'Cerca de la meta';
+      statusIcon = Icons.trending_up;
+    } else {
+      gaugeColor = Colors.green;
+      status = '¡Dominio Total!';
+      statusIcon = Icons.emoji_events;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Termómetro MEP',
+                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$percentage%',
+                    style: TextStyle(
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      color: gaugeColor,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: gaugeColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  children: [
+                    Icon(statusIcon, color: gaugeColor, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      status,
+                      style: TextStyle(
+                        color: gaugeColor,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              value: percentage / 100,
+              backgroundColor: Colors.grey[800],
+              valueColor: AlwaysStoppedAnimation(gaugeColor),
+              minHeight: 12,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '0%',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+              Text(
+                '50%',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+              Text(
+                '100%',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ).animate().fadeIn().scale(begin: const Offset(0.95, 0.95));
+  }
+
+  Widget _buildMessageByPercentage(int percentage) {
+    String message;
+    Color color;
+
+    if (percentage < 60) {
+      message =
+          'Necesitas reforzar este tema. Revisa los errores y practica más.';
+      color = Colors.red;
+    } else if (percentage < 80) {
+      message = '¡Vas bien! Repasa los temas donde fallaste para mejorar.';
+      color = Colors.amber;
+    } else {
+      message = '¡Excelente! Estás listo para las Pruebas Nacionales.';
+      color = Colors.green;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [color.withValues(alpha: 0.2), color.withValues(alpha: 0.05)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(message, style: TextStyle(color: Colors.grey[300])),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(delay: 200.ms);
+  }
+
+  Widget _buildTimeComparison(Map<String, dynamic> timeStats) {
+    final avgTime = timeStats['avgTime'] as double;
+    final idealTime = 1.8;
+    final isSlow = avgTime > idealTime * 1.2;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.timer, color: isSlow ? Colors.orange : Colors.green),
+              const SizedBox(width: 8),
+              const Text(
+                'Análisis de Tiempo',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildTimeStat(
+                  'Promedio',
+                  '${avgTime.toStringAsFixed(1)} min',
+                  avgTime <= idealTime ? Colors.green : Colors.orange,
+                ),
+              ),
+              Container(width: 1, height: 40, color: Colors.grey[700]),
+              Expanded(
+                child: _buildTimeStat(
+                  'Ideal',
+                  '${idealTime.toStringAsFixed(1)} min',
+                  Colors.blue,
+                ),
+              ),
+              Container(width: 1, height: 40, color: Colors.grey[700]),
+              Expanded(
+                child: _buildTimeStat(
+                  'Total',
+                  '${timeStats['totalMinutes']} min',
+                  Colors.purple,
+                ),
+              ),
+            ],
+          ),
+          if (isSlow) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.speed, color: Colors.orange, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Zona de peligro: Dedicaste demasiado tiempo por pregunta',
+                      style: TextStyle(color: Colors.orange[300], fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    ).animate().fadeIn(delay: 300.ms);
+  }
+
+  Widget _buildTimeStat(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+      ],
+    );
+  }
+
+  Widget _buildTopicBreakdown(Map<String, List<int>> topicStats) {
+    final topics = topicStats.entries.toList()
+      ..sort((a, b) {
+        final aPct = a.value[1] / (a.value[0] == 0 ? 1 : a.value[0]);
+        final bPct = b.value[1] / (b.value[0] == 0 ? 1 : b.value[0]);
+        return aPct.compareTo(bPct);
+      });
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.bookmark, color: Colors.blue),
+              SizedBox(width: 8),
+              Text(
+                'Desglose por Temas',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...topics.map((entry) {
+            final total = entry.value[0];
+            final correct = entry.value[1];
+            final pct = total > 0 ? (correct / total * 100).round() : 0;
+            final isWeak = pct < 70;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(color: Colors.white),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            '$correct/$total',
+                            style: TextStyle(
+                              color: isWeak ? Colors.red : Colors.green,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: (isWeak ? Colors.red : Colors.green)
+                                  .withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '$pct%',
+                              style: TextStyle(
+                                color: isWeak ? Colors.red : Colors.green,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          if (isWeak) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () => _askDeXAboutTopic(entry.key),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.purple.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(
+                                  Icons.auto_awesome,
+                                  color: Colors.purple,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: pct / 100,
+                      backgroundColor: Colors.grey[800],
+                      valueColor: AlwaysStoppedAnimation(
+                        pct >= 90
+                            ? Colors.green
+                            : pct >= 70
+                            ? Colors.amber
+                            : Colors.red,
+                      ),
+                      minHeight: 6,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    ).animate().fadeIn(delay: 400.ms);
+  }
+
+  Widget _buildDeXActionCard(Map<String, List<int>> topicStats) {
+    final weakTopics = topicStats.entries
+        .where((e) {
+          final pct = e.value[0] > 0 ? e.value[1] / e.value[0] : 0;
+          return pct < 0.7;
+        })
+        .take(1)
+        .toList();
+
+    if (weakTopics.isEmpty) return const SizedBox.shrink();
+
+    final weakTopic = weakTopics.first.key;
+    final wrongCount = weakTopics.first.value[0] - weakTopics.first.value[1];
+
+    return GestureDetector(
+      onTap: () => _askDeXAboutTopic(weakTopic),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [Colors.blue, Colors.purple]),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.purple.withValues(alpha: 0.4),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Icon(
+                Icons.auto_awesome,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '¿DeX, por qué fallé?',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Analiza tus $wrongCount errores en "$weakTopic" y genera un plan de estudio.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, color: Colors.white),
+          ],
+        ),
+      ),
+    ).animate().fadeIn(delay: 500.ms);
+  }
+
+  Map<String, List<int>> _calculateTopicStats() {
+    final stats = <String, List<int>>{};
+    for (int i = 0; i < _questions.length; i++) {
+      final topic = _questions[i].topic;
+      if (!stats.containsKey(topic)) {
+        stats[topic] = [0, 0];
+      }
+      stats[topic]![0]++;
+      if (_questions[i].isCorrect(_userAnswers[i])) {
+        stats[topic]![1]++;
+      }
+    }
+    return stats;
+  }
+
+  Map<String, dynamic> _calculateTimeStats() {
+    if (_questionTimes.isEmpty) {
+      return {'avgTime': 1.8, 'totalMinutes': 90};
+    }
+
+    final totalSeconds = _questionTimes.fold<int>(0, (a, b) => a + b);
+    final totalMinutes = (totalSeconds / 60).round();
+    final avgTime = totalSeconds / _questionTimes.length / 60;
+
+    return {'avgTime': avgTime, 'totalMinutes': totalMinutes};
+  }
+
+  Future<void> _askDeXAboutTopic(String topic) async {
+    setState(() {
+      _isAnalyzing = true;
+      _analyzingMessage = 'DeX analiza "$topic"...';
+    });
+
+    final aiClient = ref.read(aiClientProvider);
+    if (aiClient == null) {
+      setState(() {
+        _isAnalyzing = false;
+        _aiAnalysis = 'DeX no está disponible.';
+      });
+      return;
+    }
+
+    final wrongQuestions = <Map<String, dynamic>>[];
+    for (int i = 0; i < _questions.length; i++) {
+      if (_questions[i].topic == topic &&
+          !_questions[i].isCorrect(_userAnswers[i])) {
+        wrongQuestions.add(_questions[i].toMap());
+      }
+    }
+
+    try {
+      final analysis = await aiClient
+          .chat(
+            messages: [
+              {
+                'role': 'system',
+                'content':
+                    '''Soy DeX, tu tutor en Pruebas Nacionales Costa Rica.
+
+El estudiante falló en "$topic". 
+
+MÍO DIRECTO Y ANALÍTICO:
+1. Di POR QUÉ falló (error común específico)
+2. Explica el concepto en 2 líneas MAX
+3. Dame un consejo para recordar
+4. Anima: "Lo dominarás en 3 repasos"
+
+Máximo 150 palabras. Sin rodeos.''',
+              },
+              {
+                'role': 'user',
+                'content':
+                    'Fallaste en:\n${wrongQuestions.map((q) => '- ${q["question"]}').join("\n")}\n\n¿Por qué fallé y qué debo hacer?',
+              },
+            ],
+            maxTokens: 1500,
+          )
+          .timeout(const Duration(seconds: 60));
+
+      setState(() {
+        _aiAnalysis = analysis;
+        _isAnalyzing = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isAnalyzing = false;
+        _aiAnalysis = 'Error al analizar. Intenta de nuevo.';
+      });
+    }
+  }
+
+  Widget _buildResultsActions() {
+    final incorrectCount = _questions.length - _correctAnswers;
+
+    return Column(
+      children: [
+        if (_isGeneratingPDF)
+          _buildLoadingCard(_pdfMessage)
+        else
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _generateSummaryPDF,
+              icon: const Icon(Icons.picture_as_pdf),
+              label: const Text('Descargar Resumen en PDF'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor: Colors.red[700],
+              ),
+            ),
+          ).animate().fadeIn(delay: 600.ms),
+        const SizedBox(height: 12),
+        if (incorrectCount > 0)
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _showReviewMistakes(context),
+              icon: const Icon(Icons.rate_review),
+              label: Text('Revisar $incorrectCount errores'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+          ).animate().fadeIn(delay: 700.ms),
+        const SizedBox(height: 12),
+        if (_isGeneratingNewQuestions)
+          _buildLoadingCard(_generatingMessage)
+        else
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _retakeWithNewQuestions,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Repetir con preguntas diferentes'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+          ).animate().fadeIn(delay: 800.ms),
+        const SizedBox(height: 24),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: () {
+              _saveResultToProfile();
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              backgroundColor: AppTheme.primaryColor,
+            ),
+            child: const Text('Guardar y Volver al Inicio'),
+          ),
+        ).animate().fadeIn(delay: 900.ms),
+      ],
+    );
+  }
+
+  Future<void> _saveResultToProfile() async {
+    try {
+      final db = ref.read(databaseServiceProvider);
+      final userId = ref.read(currentUserIdProvider) ?? 'guest';
+      final odId = 'quiz_${DateTime.now().millisecondsSinceEpoch}';
+      final totalTime = _remainingSeconds > 0
+          ? (widget.questionCount * 1.8 * 60).round() - _remainingSeconds
+          : 0;
+
+      await db.saveQuizResult(
+        odId: odId,
+        userId: userId,
+        totalQuestions: _questions.length,
+        correctAnswers: _correctAnswers,
+        levelIndex: widget.levelIndex,
+        categoryIndex: widget.subjectIndex,
+        durationSeconds: totalTime,
+        userAnswers: _userAnswers,
+      );
+
+      debugPrint('Resultado guardado: $odId');
+    } catch (e) {
+      debugPrint('Error guardando resultado: $e');
+    }
+  }
+
+  // TODO: Eliminar código duplicado entre aquí y _ReviewMistakesPage
 
   Widget _buildLoadingCard(String message) {
     return Container(
@@ -1165,14 +1593,9 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
-                  'Análisis de CoDy',
+                  'Análisis de DeX',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.volume_up),
-                onPressed: () => TTSService.instance.speak(_aiAnalysis!),
-                tooltip: 'Escuchar análisis',
               ),
             ],
           ),
@@ -1195,7 +1618,7 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
             child: ElevatedButton.icon(
               onPressed: _analyzeResults,
               icon: const Icon(Icons.psychology),
-              label: const Text('Análisis con CoDy'),
+              label: const Text('Análisis con DeX'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 backgroundColor: AppTheme.primaryColor,
@@ -1274,13 +1697,13 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
       }
     });
 
-    final groqClient = ref.read(groqClientProvider);
-    if (groqClient == null) {
+    final aiClient = ref.read(aiClientProvider);
+    if (aiClient == null) {
       _loadingTimer?.cancel();
       setState(() {
         _isAnalyzing = false;
         _aiAnalysis =
-            'CoDy no está disponible en este momento. '
+            'DeX no está disponible en este momento. '
             'Asegúrate de tener conexión a internet.';
       });
       return;
@@ -1288,12 +1711,14 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
 
     try {
       final questionData = _questions.map((q) => q.toMap()).toList();
-      final analysis = await groqClient.analyzeQuizResults(
-        questions: questionData,
-        userAnswers: _userAnswers,
-        subject: widget.subjectName,
-        level: widget.levelIndex + 10,
-      );
+      final analysis = await aiClient
+          .analyzeQuizResults(
+            questions: questionData,
+            userAnswers: _userAnswers,
+            subject: widget.subjectName,
+            level: widget.levelIndex + 10,
+          )
+          .timeout(const Duration(seconds: 60));
 
       _loadingTimer?.cancel();
       if (mounted) {
@@ -1334,37 +1759,40 @@ DISTRIBUCIÓN DE CONTENIDOS DE ESPAÑOL:
       _pdfMessage = 'Preparando resumen...';
     });
 
-    final groqClient = ref.read(groqClientProvider);
+    final aiClient = ref.read(aiClientProvider);
     String summaryContent;
 
-    if (groqClient != null) {
+    if (aiClient != null) {
       try {
         final topics = _getUniqueTopics();
-        setState(() => _pdfMessage = 'CoDy está escribiendo el resumen...');
+        setState(() => _pdfMessage = 'DeX está escribiendo el resumen...');
 
-        final response = await groqClient
+        final response = await aiClient
             .chat(
               messages: [
                 {
                   'role': 'system',
                   'content':
-                      '''Eres CoDy, tutor costarricense. Genera resúmenes claros y concisos para estudiantes.
-Cada resumen debe tener:
-- Definición breve del tema
-- Ejemplo simple y claro
-- Consejo clave para recordar
-Escribe en español de Costa Rica.''',
+                      '''Soy DeX, tu tutor en Pruebas Nacionales Costa Rica.
+
+Genera resúmenes DIRECTOS para el examen:
+- Nombre del tema en **negrita** (con ** al inicio y final)
+- Definición: 1 línea
+- Ejemplo: Práctico y claro (usa "Ejemplo:" al inicio)
+- Consejo: Para no olvidarlo (usa "Consejo:" al inicio)
+
+Máximo conciso. Ve al grano.''',
                 },
                 {
                   'role': 'user',
                   'content':
-                      'Genera un resumen en PDF para estos temas de ${widget.subjectName}:\n${topics.join("\n")}\n\n'
-                      'Para cada tema incluye:\n1. Nombre del tema\n2. Definición de 1-2 oraciones\n3. Un ejemplo práctico simple\n4. Un consejo para recordar\n\nSé muy conciso y claro.',
+                      'Resumen para ${widget.subjectName}:\n${topics.join("\n")}\n\n'
+                      'Para cada tema incluye:\n1. **Nombre del tema**\n2. Una definición de 1-2 oraciones\n3. Un ejemplo práctico simple (comienza con "Ejemplo:")\n4. Un consejo para recordar (comienza con "Consejo:")\n\nSé muy conciso y claro.',
                 },
               ],
               maxTokens: 8000,
             )
-            .timeout(const Duration(seconds: 90));
+            .timeout(const Duration(seconds: 120));
 
         summaryContent = response;
       } catch (e) {
@@ -1375,8 +1803,20 @@ Escribe en español de Costa Rica.''',
     }
 
     try {
-      final pdf = await _createPDF(summaryContent);
-      await _saveAndSharePDF(pdf);
+      final pdfBytes = await PdfGeneratorService.instance.generateSummary(
+        title: 'Resumen de ${widget.subjectName}',
+        subject: widget.subjectName,
+        content: summaryContent,
+        logoPath: 'assets/logonuevo.png',
+      );
+
+      await PdfGeneratorService.instance.sharePdf(
+        bytes: pdfBytes,
+        filename:
+            'resumen_${widget.subjectName.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        text: 'Resumen de ${widget.subjectName} - Generado por CoDeXSdY',
+      );
+
       if (mounted) {
         setState(() => _isGeneratingPDF = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1437,11 +1877,11 @@ Escribe en español de Costa Rica.''',
         'Ejemplo: Un triángulo tiene 3 lados y la suma de sus ángulos es 180°.\n'
         'Consejo: Memoriza las fórmulas de áreas y perímetros.',
     'Estadística':
-        'Ciencia de收集 y analizar datos.\n'
+        'Ciencia de recopilar y analizar datos.\n'
         'Ejemplo: La media (promedio) de 4, 6, 8 es (4+6+8)/3 = 6.\n'
         'Consejo: Moda = lo que más se repite. Mediana = el del medio.',
     'Funciones':
-        'Relación donde cada输入 tiene una única输出.\n'
+        'Relación donde cada entrada tiene una única salida.\n'
         'Ejemplo: y = 2x + 1. Si x=3, entonces y=7.\n'
         'Consejo: Una función es como una máquina que transforma inputs en outputs.',
     'Trigonometría':
@@ -1490,91 +1930,6 @@ Escribe en español de Costa Rica.''',
         'Consejo: Conoce los movimientos literarios: Romanticismo, Modernismo, etc.',
   };
 
-  Future<PdfDocument> _createPDF(String content) async {
-    final document = PdfDocument();
-    final page = document.pages.add();
-
-    page.graphics.drawString(
-      'Resumen de ${widget.subjectName}',
-      PdfStandardFont(PdfFontFamily.helvetica, 24, style: PdfFontStyle.bold),
-      bounds: const Rect.fromLTWH(0, 0, 500, 40),
-      brush: PdfSolidBrush(PdfColor(99, 102, 241)),
-    );
-
-    page.graphics.drawString(
-      'Generado por CoDy - ${DateTime.now().day}/${DateTime.now().month}/${DateTime.now().year}',
-      PdfStandardFont(PdfFontFamily.helvetica, 10),
-      bounds: const Rect.fromLTWH(0, 45, 500, 20),
-      brush: PdfSolidBrush(PdfColor(128, 128, 128)),
-    );
-
-    int yPosition = 80;
-    final lines = content.split('\n');
-
-    for (final line in lines) {
-      if (line.trim().isEmpty) {
-        yPosition += 15;
-        continue;
-      }
-
-      if (line.startsWith('**') && line.endsWith('**')) {
-        final title = line.replaceAll('**', '');
-        page.graphics.drawString(
-          title,
-          PdfStandardFont(
-            PdfFontFamily.helvetica,
-            16,
-            style: PdfFontStyle.bold,
-          ),
-          bounds: Rect.fromLTWH(0, yPosition.toDouble(), 500, 25),
-          brush: PdfSolidBrush(PdfColor(99, 102, 241)),
-        );
-        yPosition += 30;
-      } else {
-        final fontSize = line.contains('Ejemplo:') || line.contains('Consejo:')
-            ? 11.0
-            : 12.0;
-        final formattedLine = line
-            .replaceAll('Ejemplo:', '📝 Ejemplo:')
-            .replaceAll('Consejo:', '💡 Consejo:');
-
-        page.graphics.drawString(
-          formattedLine,
-          PdfStandardFont(PdfFontFamily.helvetica, fontSize),
-          bounds: Rect.fromLTWH(10, yPosition.toDouble(), 580, 20),
-          brush: PdfSolidBrush(PdfColor(60, 60, 60)),
-        );
-        yPosition += 22;
-      }
-
-      if (yPosition > 750) {
-        break;
-      }
-    }
-
-    page.graphics.drawString(
-      'CoDeXSdY - Tu asistente de estudio',
-      PdfStandardFont(PdfFontFamily.helvetica, 9),
-      bounds: Rect.fromLTWH(0, 780, 500, 15),
-      brush: PdfSolidBrush(PdfColor(150, 150, 150)),
-    );
-
-    return document;
-  }
-
-  Future<void> _saveAndSharePDF(PdfDocument document) async {
-    final bytes = await document.save();
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(
-      '${dir.path}/resumen_${widget.subjectName}_${DateTime.now().millisecondsSinceEpoch}.pdf',
-    );
-    await file.writeAsBytes(bytes);
-
-    await Share.shareXFiles([
-      XFile(file.path),
-    ], text: 'Resumen de ${widget.subjectName} - Generado por CoDy');
-  }
-
   Future<void> _retakeWithNewQuestions() async {
     setState(() {
       _isGeneratingNewQuestions = true;
@@ -1600,88 +1955,226 @@ Escribe en español de Costa Rica.''',
       }
     });
 
-    final groqClient = ref.read(groqClientProvider);
-    if (groqClient == null) {
-      _loadingTimer?.cancel();
-      setState(() => _isGeneratingNewQuestions = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'CoDy no está disponible. '
-              'Asegúrate de tener conexión a internet.',
-            ),
-          ),
-        );
-      }
-      return;
-    }
+    final aiClient = ref.read(aiClientProvider);
 
     try {
       final weakTopics = _getWeakTopics().isNotEmpty
           ? _getWeakTopics()
           : widget.topics;
 
-      final response = await groqClient.generateNewQuestions(
-        subject: widget.subjectName,
-        level: widget.levelIndex + 10,
-        count: widget.questionCount,
-        topics: weakTopics,
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⏳ Generando con DeX (máx 2 minutos)...'),
+          backgroundColor: Colors.blue,
+          duration: Duration(seconds: 3),
+        ),
       );
+
+      debugPrint(
+        'Iniciando generación de preguntas para ${widget.subjectName}...',
+      );
+
+      final response = await aiClient
+          .generateNewQuestions(
+            subject: widget.subjectName,
+            level: widget.levelIndex + 10,
+            count: widget.questionCount,
+            topics: weakTopics,
+          )
+          .timeout(const Duration(seconds: 90));
 
       final newQuestions = _parseAIQuestions(response);
       _loadingTimer?.cancel();
+
       if (newQuestions.isNotEmpty) {
         setState(() {
           _newQuestions = newQuestions;
           _isGeneratingNewQuestions = false;
         });
         if (mounted) _showRetakeDialog();
-      } else {
-        setState(() => _isGeneratingNewQuestions = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'No pude generar nuevas preguntas. '
-                'Intenta de nuevo.',
-              ),
-            ),
-          );
-        }
+        return;
       }
+
+      _loadLocalQuestions();
     } catch (e) {
       _loadingTimer?.cancel();
       if (mounted) {
-        setState(() => _isGeneratingNewQuestions = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error: ${e.toString().replaceAll("Exception: ", "")}. Usando preguntas locales.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
       }
+      _loadLocalQuestions();
     }
   }
 
   List<Question> _parseAIQuestions(String response) {
     try {
-      final jsonMatch = RegExp(r'\[.*\]', dotAll: true).firstMatch(response);
-      if (jsonMatch == null) return [];
+      debugPrint('AI Response length: ${response.length}');
 
-      final List<dynamic> data = jsonDecode(jsonMatch.group(0)!);
-      return data.map((item) {
-        return Question.create(
-          odId: DateTime.now().millisecondsSinceEpoch.toString(),
-          question: item['question'],
-          options: List<String>.from(item['options']),
-          correctAnswerIndex: item['correctIndex'] ?? 0,
-          explanation: item['explanation'] ?? 'Revisa el tema.',
-          categoryIndex: widget.subjectIndex,
-          levelIndex: widget.levelIndex,
-          topic: item['topic'] ?? widget.subjectName,
-        );
-      }).toList();
+      String jsonStr = _extractJsonFromResponse(response);
+
+      if (jsonStr.isEmpty) {
+        debugPrint('No se encontró JSON en la respuesta');
+        return [];
+      }
+
+      final List<dynamic> data = jsonDecode(jsonStr);
+
+      if (data.isEmpty) {
+        debugPrint('El array JSON está vacío');
+        return [];
+      }
+
+      final questions = <Question>[];
+
+      for (int i = 0; i < data.length; i++) {
+        try {
+          final item = data[i];
+
+          // Aceptar diferentes nombres de campos
+          String question =
+              item['question']?.toString() ??
+              item['enunciado']?.toString() ??
+              item['pregunta']?.toString() ??
+              '';
+          if (question.isEmpty) {
+            debugPrint('Pregunta $i sin texto, saltando');
+            continue;
+          }
+
+          List<String> options = [];
+          final optionsRaw =
+              item['options'] ?? item['opciones'] ?? item['choices'];
+          if (optionsRaw is List && optionsRaw.isNotEmpty) {
+            options = optionsRaw.map((e) => e.toString().trim()).toList();
+          } else if (optionsRaw is String && optionsRaw.isNotEmpty) {
+            options = optionsRaw.split(',').map((e) => e.trim()).toList();
+          }
+
+          if (options.length < 2 || options.isEmpty) {
+            debugPrint('Pregunta $i sin opciones válidas, saltando');
+            continue;
+          }
+
+          while (options.length < 4) {
+            options.add('Opción ${options.length + 1}');
+          }
+
+          int correctIndex = 0;
+
+          // Buscar el índice de respuesta correcta en diferentes campos
+          if (item['correctIndex'] is int) {
+            correctIndex = item['correctIndex'];
+          } else if (item['correctAnswerIndex'] is int) {
+            correctIndex = item['correctAnswerIndex'];
+          } else {
+            // Buscar en texto de respuesta correcta
+            final answerFields = [
+              'correctAnswer',
+              'respuesta',
+              'answer',
+              'correcta',
+            ];
+            for (final field in answerFields) {
+              if (item[field] is String) {
+                final correctAnswer = item[field].toString().toUpperCase();
+                if (correctAnswer.contains('A') ||
+                    correctAnswer.contains('1')) {
+                  correctIndex = 0;
+                  break;
+                } else if (correctAnswer.contains('B') ||
+                    correctAnswer.contains('2')) {
+                  correctIndex = 1;
+                  break;
+                } else if (correctAnswer.contains('C') ||
+                    correctAnswer.contains('3')) {
+                  correctIndex = 2;
+                  break;
+                } else if (correctAnswer.contains('D') ||
+                    correctAnswer.contains('4')) {
+                  correctIndex = 3;
+                  break;
+                }
+              }
+            }
+          }
+
+          correctIndex = correctIndex.clamp(0, options.length - 1);
+
+          questions.add(
+            Question.create(
+              odId: 'ai_${DateTime.now().millisecondsSinceEpoch}_$i',
+              question: question,
+              options: options.take(4).toList(),
+              correctAnswerIndex: correctIndex,
+              explanation:
+                  item['explanation']?.toString() ??
+                  item['explicacion']?.toString() ??
+                  'Revisa el tema.',
+              categoryIndex: widget.subjectIndex,
+              levelIndex: widget.levelIndex,
+              topic:
+                  item['topic']?.toString() ??
+                  item['tema']?.toString() ??
+                  widget.subjectName,
+            ),
+          );
+        } catch (e) {
+          debugPrint('Error parsing pregunta $i: $e');
+          continue;
+        }
+      }
+
+      debugPrint('Parsed ${questions.length} preguntas');
+      return questions;
     } catch (e) {
+      debugPrint('Error parsing AI questions: $e');
       return [];
     }
+  }
+
+  String _extractJsonFromResponse(String text) {
+    // Limpiar texto de markdown si existe
+    text = text
+        .replaceAll(RegExp(r'```json\s*'), '[')
+        .replaceAll(RegExp(r'```\s*'), '');
+    text = text.replaceAll(RegExp(r'`'), '');
+
+    // Buscar array JSON [...]
+    final firstBracket = text.indexOf('[');
+    final lastBracket = text.lastIndexOf(']');
+
+    if (firstBracket != -1 && lastBracket != -1 && firstBracket < lastBracket) {
+      String jsonStr = text.substring(firstBracket, lastBracket + 1);
+      jsonStr = jsonStr.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
+      return jsonStr.trim();
+    }
+
+    // Buscar objeto JSON con propiedad "preguntas" o "questions"
+    final firstBrace = text.indexOf('{');
+    final lastBrace = text.lastIndexOf('}');
+
+    if (firstBrace != -1 && lastBrace != -1 && firstBrace < lastBrace) {
+      String jsonStr = text.substring(firstBrace, lastBrace + 1);
+
+      // Intentar extraer el array interno
+      final arrayMatch = RegExp(
+        r'"(?:preguntas|questions|questionsArr)"\s*:\s*(\[[^\]]+\])',
+      ).firstMatch(jsonStr);
+      if (arrayMatch != null) {
+        return arrayMatch.group(1) ?? '';
+      }
+
+      jsonStr = jsonStr.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
+      return jsonStr.trim();
+    }
+
+    return '';
   }
 
   void _showRetakeDialog() {
@@ -1696,7 +2189,7 @@ Escribe en español de Costa Rica.''',
           ],
         ),
         content: Text(
-          'CoDy ha generado ${_newQuestions!.length} preguntas diferentes '
+          'DeX ha generado ${_newQuestions!.length} preguntas diferentes '
           'basadas en los temas que necesitas repasar.',
         ),
         actions: [
@@ -3324,7 +3817,7 @@ Escribe en español de Costa Rica.''',
         'Cívica',
       ),
       _createQ(
-        '¿Qué旅游资源 tiene Costa Rica?',
+        '¿Qué recursos turísticos tiene Costa Rica?',
         [
           'Playas, volcanes, biodiversidad',
           'Desiertos',
@@ -3962,25 +4455,6 @@ Escribe en español de Costa Rica.''',
       topic: topic,
     );
   }
-
-  static Question _createQuestion(
-    String question,
-    List<String> options,
-    int correctIndex,
-    String explanation,
-    String topic,
-  ) {
-    return Question.create(
-      odId: DateTime.now().millisecondsSinceEpoch.toString(),
-      question: question,
-      options: options,
-      correctAnswerIndex: correctIndex,
-      explanation: explanation,
-      categoryIndex: 0,
-      levelIndex: 0,
-      topic: topic,
-    );
-  }
 }
 
 class _ReviewMistakesPage extends StatefulWidget {
@@ -4103,12 +4577,6 @@ class _ReviewMistakesPageState extends State<_ReviewMistakesPage> {
                                   color: Colors.red,
                                 ),
                               ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.volume_up),
-                              onPressed: () =>
-                                  TTSService.instance.speak(question.question),
-                              tooltip: 'Escuchar',
                             ),
                           ],
                         ),

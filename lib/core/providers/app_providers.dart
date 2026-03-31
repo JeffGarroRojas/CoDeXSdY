@@ -2,27 +2,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../services/database_service.dart';
-import '../services/groq_client.dart';
+import '../services/ai_client.dart';
 import '../services/sm2_algorithm.dart';
 import '../../features/flashcards/data/models/flashcard.dart';
 import '../../features/documents/data/models/user_profile.dart';
+import '../../features/ai_assistant/data/models/chat_session.dart';
 
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
   return DatabaseService.instance;
 });
 
-final groqApiKeyProvider = Provider<String?>((ref) {
-  const apiKey = String.fromEnvironment('GROQ_API_KEY', defaultValue: '');
-  if (apiKey.isEmpty) {
-    return null;
-  }
-  return apiKey;
-});
-
-final groqClientProvider = Provider<GroqClient?>((ref) {
-  final apiKey = ref.watch(groqApiKeyProvider);
-  if (apiKey == null) return null;
-  return GroqClient(apiKey: apiKey);
+final aiClientProvider = Provider<AIClient>((ref) {
+  return AIClient();
 });
 
 final guestExpiryProvider = Provider<DateTime?>((ref) {
@@ -36,6 +27,8 @@ final sm2AlgorithmProvider = Provider<SM2Algorithm>((ref) {
 });
 
 final currentUserIdProvider = StateProvider<String?>((ref) => null);
+
+final userNameProvider = StateProvider<String>((ref) => 'Estudiante');
 
 final flashcardsProvider = FutureProvider.family<List<Flashcard>, String>((
   ref,
@@ -285,4 +278,87 @@ class ChatMessagesNotifier extends StateNotifier<List<ChatMessage>> {
       debugPrint('Error clearing chat messages: $e');
     }
   }
+
+  void setMessages(List<ChatMessage> messages) {
+    state = messages;
+  }
 }
+
+final chatSessionsProvider =
+    StateNotifierProvider<ChatSessionsNotifier, List<ChatSession>>((ref) {
+      final userId = ref.watch(currentUserIdProvider) ?? 'anonymous';
+      return ChatSessionsNotifier(ref, userId);
+    });
+
+class ChatSessionsNotifier extends StateNotifier<List<ChatSession>> {
+  final Ref _ref;
+  final String _userId;
+
+  ChatSessionsNotifier(this._ref, this._userId) : super([]) {
+    loadSessions();
+  }
+
+  Future<void> loadSessions() async {
+    try {
+      final db = DatabaseService.instance;
+      state = db.getChatSessions(_userId);
+    } catch (e) {
+      debugPrint('Error loading chat sessions: $e');
+    }
+  }
+
+  Future<ChatSession> createSession({String? name, String? context}) async {
+    final db = DatabaseService.instance;
+    final session = await db.createChatSession(
+      userId: _userId,
+      name: name,
+      context: context,
+    );
+    await loadSessions();
+    return session;
+  }
+
+  Future<void> renameSession(String sessionId, String newName) async {
+    final db = DatabaseService.instance;
+    await db.renameChatSession(sessionId, newName);
+    await loadSessions();
+  }
+
+  Future<void> deleteSession(String sessionId) async {
+    final db = DatabaseService.instance;
+    await db.deleteChatSession(sessionId);
+    await loadSessions();
+  }
+
+  Future<void> addMessage(String sessionId, String content, bool isUser) async {
+    final db = DatabaseService.instance;
+    await db.addMessageToSession(sessionId, content, isUser);
+    await loadSessions();
+  }
+
+  Future<void> updateSessionNameFromMessages(
+    String sessionId,
+    List<ChatMessage> messages,
+  ) async {
+    final db = DatabaseService.instance;
+    final session = db.getChatSession(sessionId);
+    if (session != null && session.name == 'Nueva conversación') {
+      final newName = db.generateSessionName(
+        messages
+            .map(
+              (m) => ChatMessageItem(
+                id: 'temp',
+                content: m.content,
+                isUser: m.isUser,
+                timestamp: m.timestamp,
+              ),
+            )
+            .toList(),
+      );
+      await db.renameChatSession(sessionId, newName);
+      await loadSessions();
+    }
+  }
+}
+
+final currentChatSessionProvider = StateProvider<ChatSession?>((ref) => null);

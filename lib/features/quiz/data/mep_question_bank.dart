@@ -285,7 +285,7 @@ class MEPQuestionBank {
         'Física - Densidad',
       ),
       _q(
-        '¿Qué son los生态系统?',
+        '¿Qué son los ecosistemas?',
         [
           'Grupos de células similares',
           'Comunidades de seres vivos + ambiente físico',
@@ -784,7 +784,7 @@ class MEPQuestionBank {
           'Derechos solo para ciudadanos',
           'Derechos inherentes a toda persona por su dignidad',
           'Derechos de un grupo específico',
-          'Derechos限定 a un país',
+          'Derechos limitados a un país',
         ],
         1,
         'Los derechos humanos universales son inherentes a todas las personas sin distinción.',

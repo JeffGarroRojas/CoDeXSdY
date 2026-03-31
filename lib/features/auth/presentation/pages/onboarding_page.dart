@@ -28,7 +28,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
 
   final _onboardingQuestions = [
     {
-      'title': '¡Hola! Soy CoDy',
+      'title': '¡Hola! Soy DeX',
       'subtitle':
           'Vamos a conocerte para personalizar tu experiencia de estudio.',
       'icon': Icons.waving_hand,
@@ -161,7 +161,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
               ),
               const SizedBox(width: 12),
               const Text(
-                'CoDy',
+                'DeX',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: AppTheme.primaryColor,
@@ -261,7 +261,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           style: const TextStyle(fontSize: 18),
           textCapitalization: TextCapitalization.words,
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
         _buildNextButton(),
       ],
     ).animate().fadeIn(delay: 300.ms);
@@ -273,68 +273,76 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
 
     return Column(
       children: [
-        ...options.asMap().entries.map((entry) {
-          final index = entry.key;
-          final option = entry.value as Map<String, dynamic>;
-          final isSelected = _preferences[field] == option['value'];
+        Flexible(
+          child: SingleChildScrollView(
+            child: Column(
+              children: options.asMap().entries.map((entry) {
+                final index = entry.key;
+                final option = entry.value as Map<String, dynamic>;
+                final isSelected = _preferences[field] == option['value'];
 
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: InkWell(
-              onTap: () {
-                setState(() => _preferences[field] = option['value']);
-              },
-              borderRadius: BorderRadius.circular(16),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppTheme.primaryColor.withValues(alpha: 0.2)
-                      : AppTheme.cardColor,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: isSelected
-                        ? AppTheme.primaryColor
-                        : Colors.transparent,
-                    width: 2,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      option['icon'] ?? Icons.circle,
-                      color: isSelected
-                          ? AppTheme.primaryColor
-                          : Colors.grey[400],
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Text(
-                        option['value'],
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: InkWell(
+                    onTap: () {
+                      setState(() => _preferences[field] = option['value']);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppTheme.primaryColor.withValues(alpha: 0.2)
+                            : AppTheme.cardColor,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
                           color: isSelected
                               ? AppTheme.primaryColor
-                              : Colors.grey[200],
+                              : Colors.transparent,
+                          width: 2,
                         ),
                       ),
-                    ),
-                    if (isSelected)
-                      const Icon(
-                        Icons.check_circle,
-                        color: AppTheme.primaryColor,
+                      child: Row(
+                        children: [
+                          Icon(
+                            option['icon'] ?? Icons.circle,
+                            color: isSelected
+                                ? AppTheme.primaryColor
+                                : Colors.grey[400],
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(
+                              option['value'],
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: isSelected
+                                    ? AppTheme.primaryColor
+                                    : Colors.grey[200],
+                              ),
+                            ),
+                          ),
+                          if (isSelected)
+                            const Icon(
+                              Icons.check_circle,
+                              color: AppTheme.primaryColor,
+                            ),
+                        ],
                       ),
-                  ],
-                ),
-              ),
+                    ),
+                  ),
+                ).animate().fadeIn(
+                  delay: Duration(milliseconds: 300 + (index * 50)),
+                );
+              }).toList(),
             ),
-          ).animate().fadeIn(delay: Duration(milliseconds: 300 + (index * 50)));
-        }),
-        const SizedBox(height: 24),
+          ),
+        ),
+        const SizedBox(height: 16),
         _buildNextButton(),
       ],
     );
@@ -347,39 +355,43 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
 
     return Column(
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: options.asMap().entries.map((entry) {
-            final index = entry.key;
-            final option = entry.value as Map<String, dynamic>;
-            final isSelected = selectedSubjects.contains(option['value']);
+        Flexible(
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: options.asMap().entries.map((entry) {
+                final index = entry.key;
+                final option = entry.value as Map<String, dynamic>;
+                final isSelected = selectedSubjects.contains(option['value']);
 
-            return FilterChip(
-              selected: isSelected,
-              label: Text(option['value'] as String),
-              avatar: Icon(
-                option['icon'] as IconData? ?? Icons.circle,
-                size: 18,
-              ),
-              onSelected: (selected) {
-                setState(() {
-                  if (selected) {
-                    selectedSubjects.add(option['value'] as String);
-                  } else {
-                    selectedSubjects.remove(option['value']);
-                  }
-                  _preferences[field] = selectedSubjects;
-                });
-              },
-              selectedColor: AppTheme.primaryColor.withValues(alpha: 0.3),
-              checkmarkColor: AppTheme.primaryColor,
-            ).animate().fadeIn(
-              delay: Duration(milliseconds: 300 + (index * 30)),
-            );
-          }).toList(),
+                return FilterChip(
+                  selected: isSelected,
+                  label: Text(option['value'] as String),
+                  avatar: Icon(
+                    option['icon'] as IconData? ?? Icons.circle,
+                    size: 18,
+                  ),
+                  onSelected: (selected) {
+                    setState(() {
+                      if (selected) {
+                        selectedSubjects.add(option['value'] as String);
+                      } else {
+                        selectedSubjects.remove(option['value']);
+                      }
+                      _preferences[field] = selectedSubjects;
+                    });
+                  },
+                  selectedColor: AppTheme.primaryColor.withValues(alpha: 0.3),
+                  checkmarkColor: AppTheme.primaryColor,
+                ).animate().fadeIn(
+                  delay: Duration(milliseconds: 300 + (index * 30)),
+                );
+              }).toList(),
+            ),
+          ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
         _buildNextButton(
           enabled: selectedSubjects.isNotEmpty,
           label: selectedSubjects.isEmpty

@@ -1,55 +1,57 @@
-# 🚀 CoDexStuDy - Resumen Maestro de Implementación
+# CoDeXSdY - Resumen de Implementación
 
-Este documento sirve como registro para el usuario y guía de contexto para otros agentes de IA. Consolida todas las mejoras, cambios arquitectónicos y requerimientos especiales implementados.
-
----
-
-## ✅ Implementaciones Recientes
-
-### 1. Migración de Base de Datos Local (Hive ➡️ Isar)
-- Se ha migrado toda la lógica de persistencia de **Hive** a **Isar**.
-- **Servicio Central**: `lib/core/services/isar_service.dart`.
-- **Modelos Migrados**: `Document`, `Flashcard`, `StudySession`, `UserProfile`.
-- **Inyección**: El `isarServiceProvider` en `providers.dart` ahora gestiona todos los Notifiers.
-
-### 2. Integración de Firebase (Cloud Sync & Auth)
-- **Dependencias**: Se añadieron `firebase_core`, `firebase_auth` y `cloud_firestore`.
-- **Inicialización**: Firebase se inicializa en `main.dart` mediante `Firebase.initializeApp()`.
-- **Servicio Auth**: Creado `lib/core/services/auth_service.dart` para gestionar login, logout y persistencia cloud.
-
-### 3. Interfaz de Usuario Premium
-- **Perfil de Usuario**: Nueva pantalla en `profile_page.dart` con estadísticas (sesiones, aciertos) y ajustes de cuenta.
-- **Transiciones**: Implementado `flutter_animate` en toda la app para efectos de escala, desvanecimiento y deslizamiento.
-- **Navegación**: Menú de navegación inferior actualizado y botones de acceso rápido en el header (Perfil y Chatbot).
-
-### 4. Nuevo Flujo de Estudio ("Escribir Tema")
-- **Dual Study Entry**: En la `HomePage`, el botón "Comenzar" ahora despliega un menú:
-    - **Subir PDF**: Flujo tradicional de carga.
-    - **Escribir Tema**: Permite introducir cualquier tema (ej. "Leyes de Newton") para ser analizado por la IA.
-- **Análisis**: Los temas escritos se redirigen al Chatbot para su procesamiento y generación de sugerencias.
-
-### 5. Chatbot Inteligente (CoDy Bot)
-- **Personalidad**: Implementado en `chatbot_page.dart`.
-- **Identidad**: El bot es educado, respetuoso y **reconoce a Jeff como su creador**.
-- **IA**: Utiliza el `groq_client.dart` para respuestas fluidas con un *System Prompt* personalizado.
+Este documento sirve como registro para el usuario y guía de contexto para otros agentes de IA.
 
 ---
 
-## 💎 Master Prompt (Guía para Agentes)
+## Estado Actual (Marzo 2026)
 
-> **Contexto del Proyecto**: CoDeXSdY es una app de estudio *Local-First*. Prioriza el funcionamiento offline con Isar y sincroniza con Firebase cuando hay conexión.
->
-> **Reglas de Desarrollo**:
-> 1. Mantener el tono premium de la UI (vibrante, animada, Material 3).
-> 2. Todas las respuestas de la IA deben ser respetuosas y educadas.
-> 3. Si el usuario pregunta por el creador, responder: **"Fue creada por Jeff"**.
-> 4. Los modelos de Isar deben generar su código (`.g.dart`) tras cualquier cambio usando `dart run build_runner build`.
-> 5. El flujo de "Escribir Tema" debe eventualmente generar flashcards automáticas similares al flujo de PDF.
+### Base de Datos Local
+- **Motor**: Hive (NO Isar)
+- **Servicio**: `lib/core/services/database_service.dart`
+- **Modelos**: Document, Flashcard, QuizResult, UserProfile, ChatSession
+
+### IA
+- **Groq**: Generación de preguntas MEP (lotes de 10 × 5 = 50 preguntas)
+- **Gemini**: Fallback cuando Groq no está disponible
+- **Cliente Principal**: `ai_client.dart` (wrapper unificado)
+
+### Funcionalidades Implementadas
+- Simulacros MEP con 50 preguntas por materia
+- Diagnóstico post-examen con análisis de DeX
+- Sistema de flashcards con algoritmo SM-2
+- Exportación a PDF
+- Chat con IA (DeX)
+- Escaneo de imágenes y reconocimiento de voz
 
 ---
 
-## 🛠️ Próximos Pasos Sugeridos
-- Implementar la lógica de sincronización (Isar ↔ Firestore).
-- Añadir la generación de flashcards basada en temas escritos (Topic-based Generation).
-- Integrar cronómetros reales en las sesiones de estudio.
-- Mejorar el manejo de errores de conexión de Firebase con Toasts persistentes.
+## Limpieza Reciente (Marzo 2026)
+- Eliminados 10 servicios no utilizados
+- Unificado flujo de selección de materias
+- Eliminado código muerto y datos hardcodeados
+
+---
+
+## Servicos Activos (10)
+1. `database_service.dart` - Persistencia Hive
+2. `ai_client.dart` - Wrapper de IA
+3. `groq_client.dart` - API Groq
+4. `gemini_client.dart` - API Gemini
+5. `sm2_algorithm.dart` - Repetición espaciada
+6. `pdf_export_service.dart` - Exportar PDF
+7. `notification_service.dart` - Notificaciones
+8. `logging_service.dart` - Logs
+9. `pdf_service.dart` - Manejo de PDFs
+10. `update_service.dart` - Actualizaciones
+
+---
+
+## Dependencias Principales
+- flutter_riverpod (estado)
+- hive_flutter (persistencia)
+- google_generative_ai (Gemini)
+- firebase (auth, remote config)
+- syncfusion_flutter_pdf (PDF)
+- speech_to_text (voz)
+- image_picker (cámara)

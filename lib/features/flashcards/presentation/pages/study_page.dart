@@ -4,7 +4,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/sm2_algorithm.dart';
-import '../../../../core/services/tts_service.dart';
 import '../../data/models/flashcard.dart';
 
 class StudyPage extends ConsumerWidget {
@@ -149,8 +148,6 @@ class _StudyContentState extends ConsumerState<_StudyContent> {
           _buildProgress(),
           const SizedBox(height: 24),
           _buildFlashcard(_dueCards[_currentIndex]),
-          const SizedBox(height: 16),
-          _buildTTSButtons(_dueCards[_currentIndex]),
           const SizedBox(height: 24),
           if (_isFlipped) _buildQualityButtons(_dueCards[_currentIndex]),
         ],
@@ -307,39 +304,6 @@ class _StudyContentState extends ConsumerState<_StudyContent> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildTTSButtons(Flashcard card) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: () => TTSService.instance.speakFront(card.front),
-            icon: const Icon(Icons.volume_up, size: 18),
-            label: const Text('Pregunta'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppTheme.primaryColor,
-              side: const BorderSide(color: AppTheme.primaryColor),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: () => TTSService.instance.speakBack(card.back),
-            icon: const Icon(Icons.volume_up, size: 18),
-            label: const Text('Respuesta'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppTheme.secondaryColor,
-              side: const BorderSide(color: AppTheme.secondaryColor),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
-          ),
-        ),
-      ],
     );
   }
 

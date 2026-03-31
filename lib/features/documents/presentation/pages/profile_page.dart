@@ -7,14 +7,135 @@ import '../../../../core/providers/app_providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/services/database_service.dart';
+import '../../../../core/services/update_service.dart';
 import '../../../../core/providers/app_providers.dart' as app;
 import '../../data/models/user_profile.dart';
 
-class ProfilePage extends ConsumerWidget {
+class ProfilePage extends ConsumerStatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends ConsumerState<ProfilePage> {
+  bool _hasUpdate = false;
+  bool _checkingUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkForUpdatesOnLoad();
+  }
+
+  Future<void> _checkForUpdatesOnLoad() async {
+    await Future.delayed(Duration(milliseconds: 500));
+    if (mounted) {
+      await _checkForUpdates(context);
+    }
+  }
+
+  Future<void> _checkForUpdates(BuildContext context) async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.cardColor,
+        content: Row(
+          children: [
+            const CircularProgressIndicator(strokeWidth: 2),
+            const SizedBox(width: 16),
+            Text(
+              'Buscando actualizaciones...',
+              style: TextStyle(color: Colors.grey[300]),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final updateInfo = await UpdateService.instance.checkForUpdates();
+
+    if (mounted) {
+      Navigator.pop(context);
+      setState(() {
+        _hasUpdate = updateInfo.type != UpdateType.none;
+        _checkingUpdate = false;
+      });
+
+      if (updateInfo.type != UpdateType.none) {
+        _showUpdateDialog(context, updateInfo);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('¡Ya tienes la última versión!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showUpdateDialog(BuildContext context, UpdateInfo updateInfo) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.cardColor,
+        title: Row(
+          children: [
+            const Icon(Icons.system_update, color: Colors.green, size: 28),
+            const SizedBox(width: 8),
+            const Text('Actualización Disponible'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Versión: 1.3.3',
+              style: TextStyle(color: Colors.grey[400], fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '¿Qué hay de nuevo?',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '• Historial de chat guardado\n'
+              '• IA ya no se congela al generar contenido\n'
+              '• 3 intentos de reintento automático\n'
+              '• Timeout aumentado a 2 minutos',
+              style: TextStyle(color: Colors.grey[300], fontSize: 13),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Más tarde', style: TextStyle(color: Colors.grey[400])),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryColor,
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await UpdateService.instance.downloadAndApplyUpdate();
+            },
+            child: const Text('Actualizar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final userId = ref.watch(currentUserIdProvider) ?? 'guest';
     final isGuest = userId.startsWith('guest_');
     final profileAsync = ref.watch(profileProvider(userId));
@@ -248,6 +369,13 @@ class ProfilePage extends ConsumerWidget {
                 Icons.info_outline,
                 () => _showAboutDialog(context),
               ),
+              const Divider(height: 1),
+              _buildSettingsTile(
+                'Actualizar Versión',
+                Icons.system_update,
+                () => _checkForUpdates(context),
+                trailing: _UpdateBadge(hasUpdate: _hasUpdate),
+              ),
             ],
           ),
         ),
@@ -255,11 +383,16 @@ class ProfilePage extends ConsumerWidget {
     );
   }
 
-  Widget _buildSettingsTile(String title, IconData icon, VoidCallback onTap) {
+  Widget _buildSettingsTile(
+    String title,
+    IconData icon,
+    VoidCallback onTap, {
+    Widget? trailing,
+  }) {
     return ListTile(
       leading: Icon(icon, color: AppTheme.primaryColor),
       title: Text(title),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: trailing ?? const Icon(Icons.chevron_right),
       onTap: onTap,
     );
   }
@@ -527,7 +660,7 @@ class ProfilePage extends ConsumerWidget {
               child: const Icon(Icons.smart_toy, size: 40, color: Colors.white),
             ),
             const SizedBox(height: 16),
-            const Text('Versión 1.0.0'),
+            const Text('Versión 1.3.2'),
             const SizedBox(height: 8),
             Text(
               'Asistente de estudio con IA',
@@ -543,6 +676,58 @@ class ProfilePage extends ConsumerWidget {
             child: const Text('Cerrar'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _UpdateBadge extends StatefulWidget {
+  final bool hasUpdate;
+
+  const _UpdateBadge({required this.hasUpdate});
+
+  @override
+  State<_UpdateBadge> createState() => _UpdateBadgeState();
+}
+
+class _UpdateBadgeState extends State<_UpdateBadge>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1000),
+      vsync: this,
+    )..repeat(reverse: true);
+    _animation = Tween<double>(
+      begin: 0.8,
+      end: 1.2,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.hasUpdate) {
+      return const SizedBox.shrink();
+    }
+    return ScaleTransition(
+      scale: _animation,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: const BoxDecoration(
+          color: Colors.red,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.system_update, color: Colors.white, size: 14),
       ),
     );
   }

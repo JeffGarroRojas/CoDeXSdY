@@ -6,6 +6,7 @@ import '../../features/documents/data/models/user_profile.dart';
 import '../../features/flashcards/data/models/flashcard.dart';
 import '../../features/auth/data/models/user_preferences.dart';
 import '../../features/quiz/data/models/question.dart';
+import '../../features/ai_assistant/data/models/chat_session.dart';
 
 class ChatMessageModel {
   final String id;
@@ -61,6 +62,7 @@ class DatabaseService {
   late Box _settingsBox;
   late Box<ChatMessageModel> _chatMessagesBox;
   late Box<QuizResult> _quizResultsBox;
+  late Box<ChatSession> _chatSessionsBox;
 
   static const String _chatMessagesBoxName = 'chat_messages';
 
@@ -88,6 +90,12 @@ class DatabaseService {
     if (!Hive.isAdapterRegistered(12)) {
       Hive.registerAdapter(UserProfileAdapter());
     }
+    if (!Hive.isAdapterRegistered(13)) {
+      Hive.registerAdapter(ChatSessionAdapter());
+    }
+    if (!Hive.isAdapterRegistered(14)) {
+      Hive.registerAdapter(ChatMessageItemAdapter());
+    }
 
     _documentsBox = await Hive.openBox<Document>('documents');
     _flashcardsBox = await Hive.openBox<Flashcard>('flashcards');
@@ -98,6 +106,7 @@ class DatabaseService {
     _chatMessagesBox = await Hive.openBox<ChatMessageModel>(
       _chatMessagesBoxName,
     );
+    _chatSessionsBox = await Hive.openBox<ChatSession>('chat_sessions');
     _quizResultsBox = await Hive.openBox<QuizResult>('quiz_results');
 
     debugPrint('Database initialized with chat persistence');
@@ -578,5 +587,106 @@ class DatabaseService {
     }
 
     await _settingsBox.delete('guestUserId');
+  }
+
+  // ==================== CHAT SESSIONS ====================
+
+  Future<ChatSession> createChatSession({
+    required String userId,
+    String? name,
+    String? context,
+  }) async {
+    final id = 'chat_${DateTime.now().millisecondsSinceEpoch}';
+    final now = DateTime.now();
+
+    final session = ChatSession(
+      id: id,
+      name: name ?? 'Nueva conversación',
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+      userId: userId,
+      context: context,
+      messageCount: 0,
+    );
+
+    await _chatSessionsBox.put(id, session);
+    return session;
+  }
+
+  List<ChatSession> getChatSessions(String userId) {
+    final sessions = _chatSessionsBox.values
+        .where((s) => s.userId == userId)
+        .toList();
+    sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return sessions;
+  }
+
+  ChatSession? getChatSession(String sessionId) {
+    return _chatSessionsBox.get(sessionId);
+  }
+
+  Future<void> updateChatSession(ChatSession session) async {
+    session.updatedAt = DateTime.now();
+    await _chatSessionsBox.put(session.id, session);
+  }
+
+  Future<void> renameChatSession(String sessionId, String newName) async {
+    final session = _chatSessionsBox.get(sessionId);
+    if (session != null) {
+      session.name = newName;
+      session.updatedAt = DateTime.now();
+      await _chatSessionsBox.put(sessionId, session);
+    }
+  }
+
+  Future<void> addMessageToSession(
+    String sessionId,
+    String content,
+    bool isUser,
+  ) async {
+    final session = _chatSessionsBox.get(sessionId);
+    if (session != null) {
+      final message = ChatMessageItem(
+        id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
+        content: content,
+        isUser: isUser,
+        timestamp: DateTime.now(),
+      );
+      session.messages.add(message);
+      session.messageCount = session.messages.length;
+      session.updatedAt = DateTime.now();
+      await _chatSessionsBox.put(sessionId, session);
+    }
+  }
+
+  Future<void> deleteChatSession(String sessionId) async {
+    await _chatSessionsBox.delete(sessionId);
+  }
+
+  Future<void> deleteAllChatSessions(String userId) async {
+    final keysToDelete = _chatSessionsBox.keys.where((key) {
+      final session = _chatSessionsBox.get(key);
+      return session?.userId == userId;
+    }).toList();
+
+    for (final key in keysToDelete) {
+      await _chatSessionsBox.delete(key);
+    }
+  }
+
+  String generateSessionName(List<ChatMessageItem> messages) {
+    if (messages.isEmpty) return 'Nueva conversación';
+
+    final firstUserMessage = messages.firstWhere(
+      (m) => m.isUser,
+      orElse: () => messages.first,
+    );
+
+    final content = firstUserMessage.content;
+    if (content.length > 40) {
+      return '${content.substring(0, 40)}...';
+    }
+    return content;
   }
 }

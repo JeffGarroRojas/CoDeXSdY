@@ -1,14 +1,18 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:share_plus/share_plus.dart';
-import '../../../../core/providers/app_providers.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:file_picker/file_picker.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../../core/services/groq_client.dart';
-import '../../../../core/services/pdf_export_service.dart';
 import '../../../../core/services/database_service.dart';
-import '../../../../core/services/tts_service.dart';
+import '../../../../core/services/ai_client.dart';
+import '../../../../core/services/pdf_generator_service.dart';
+import '../../../../core/services/pdf_service.dart';
+import '../../../../core/providers/app_providers.dart';
 import '../../../auth/data/models/user_preferences.dart';
+import '../../data/models/chat_session.dart';
+import 'chat_history_page.dart';
 
 final userPreferencesProvider = FutureProvider.family<UserPreferences?, String>(
   (ref, userId) async {
@@ -18,7 +22,10 @@ final userPreferencesProvider = FutureProvider.family<UserPreferences?, String>(
 );
 
 class ChatbotPage extends ConsumerStatefulWidget {
-  const ChatbotPage({super.key});
+  final ChatSession? initialSession;
+  final String? initialMessage;
+
+  const ChatbotPage({super.key, this.initialSession, this.initialMessage});
 
   @override
   ConsumerState<ChatbotPage> createState() => _ChatbotPageState();
@@ -27,15 +34,149 @@ class ChatbotPage extends ConsumerStatefulWidget {
 class _ChatbotPageState extends ConsumerState<ChatbotPage> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isTyping = false;
-  bool _isSpeaking = false;
-  String _currentSpeakingText = '';
+  bool _isInitializing = true;
+  bool _speechEnabled = false;
+  bool _isListening = false;
+  String _lastWords = '';
   UserPreferences? _preferences;
+  ChatSession? _currentSession;
 
   @override
   void initState() {
     super.initState();
-    _loadPreferences();
+    _initSpeech();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeChat();
+    });
+  }
+
+  Future<void> _initSpeech() async {
+    _speechEnabled = await _speech.initialize(
+      onStatus: (status) {
+        if (status == 'done' || status == 'notListening') {
+          if (_lastWords.isNotEmpty && mounted) {
+            _messageController.text = _lastWords;
+            _sendMessage();
+          }
+          if (mounted) setState(() => _isListening = false);
+        }
+      },
+      onError: (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error de voz: ${error.errorMsg}')),
+          );
+          setState(() => _isListening = false);
+        }
+      },
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _startListening() async {
+    if (!_speechEnabled) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Micrófono no disponible')));
+      return;
+    }
+    setState(() {
+      _isListening = true;
+      _lastWords = '';
+    });
+    await _speech.listen(
+      onResult: (result) {
+        setState(() => _lastWords = result.recognizedWords);
+      },
+      listenFor: const Duration(seconds: 30),
+      pauseFor: const Duration(seconds: 3),
+      localeId: 'es_CR',
+    );
+  }
+
+  void _stopListening() {
+    _speech.stop();
+    setState(() => _isListening = false);
+  }
+
+  Future<void> _initializeChat() async {
+    await _loadPreferences();
+
+    if (mounted) {
+      setState(() => _isInitializing = false);
+
+      if (widget.initialSession != null) {
+        _currentSession = widget.initialSession;
+        final messages = widget.initialSession!.messages;
+        final chatMessages = messages
+            .map(
+              (m) => ChatMessage(
+                content: m.content,
+                isUser: m.isUser,
+                timestamp: m.timestamp,
+              ),
+            )
+            .toList();
+        ref.read(chatMessagesProvider.notifier).setMessages(chatMessages);
+      } else {
+        await _createNewSession();
+        if (widget.initialMessage != null &&
+            widget.initialMessage!.isNotEmpty) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted) {
+              final initialMsg = widget.initialMessage!;
+              ref
+                  .read(chatMessagesProvider.notifier)
+                  .addMessage(initialMsg, true);
+              _sendToAI(initialMsg);
+            }
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _createNewSession() async {
+    final userId = ref.read(currentUserIdProvider) ?? 'anonymous';
+    final session = await ref
+        .read(chatSessionsProvider.notifier)
+        .createSession();
+    _currentSession = session;
+
+    final welcomeMessage = '''¡Hola! Soy DeX 🎯
+
+Tu tutor especializado en Pruebas Nacionales Estandarizadas de Costa Rica.
+
+D de Datos | e de Educación | X de Experiencia y Examen
+
+¿En qué tema necesitas ayuda?''';
+
+    ref.read(chatMessagesProvider.notifier).addMessage(welcomeMessage, false);
+  }
+
+  Future<void> _loadSession(ChatSession session) async {
+    setState(() {
+      _currentSession = session;
+    });
+
+    final messages = session.messages
+        .map(
+          (m) => ChatMessage(
+            content: m.content,
+            isUser: m.isUser,
+            timestamp: m.timestamp,
+          ),
+        )
+        .toList();
+
+    ref.read(chatMessagesProvider.notifier).setMessages(messages);
+  }
+
+  Future<void> _startNewChat() async {
+    ref.read(chatMessagesProvider.notifier).clear();
+    await _createNewSession();
   }
 
   Future<void> _loadPreferences() async {
@@ -45,26 +186,6 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
       if (mounted) {
         setState(() => _preferences = prefs);
       }
-    }
-  }
-
-  void _toggleSpeech(String text) async {
-    if (_isSpeaking && _currentSpeakingText == text) {
-      await TTSService.instance.stop();
-      setState(() {
-        _isSpeaking = false;
-        _currentSpeakingText = '';
-      });
-    } else {
-      setState(() {
-        _isSpeaking = true;
-        _currentSpeakingText = text;
-      });
-      await TTSService.instance.speak(text);
-      setState(() {
-        _isSpeaking = false;
-        _currentSpeakingText = '';
-      });
     }
   }
 
@@ -89,14 +210,19 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
               ),
             ),
             const SizedBox(width: 12),
-            const Text('CoDy'),
+            const Text('DeX'),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.volume_up),
-            tooltip: 'Seleccionar voz',
-            onPressed: () => _showVoiceSelector(context),
+            icon: const Icon(Icons.history),
+            tooltip: 'Historial',
+            onPressed: () => _showHistoryPage(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Nueva conversación',
+            onPressed: () => _startNewChat(),
           ),
           IconButton(
             icon: const Icon(Icons.file_download_outlined),
@@ -104,9 +230,14 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
             onPressed: () => _showExportDialog(context),
           ),
           IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            tooltip: 'Analizar PDF',
+            onPressed: () => _analyzePdfWithDeX(),
+          ),
+          IconButton(
             icon: const Icon(Icons.delete_outline),
             onPressed: () {
-              ref.read(chatMessagesProvider.notifier).clear();
+              _showClearChatDialog(context);
             },
           ),
         ],
@@ -145,7 +276,7 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
             ),
             const SizedBox(height: 24),
             const Text(
-              '¡Hola! Soy CoDy',
+              '¡Hola! Soy DeX',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
@@ -232,7 +363,7 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
                     ),
                     SizedBox(width: 4),
                     Text(
-                      'CoDy',
+                      'DeX',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -250,34 +381,6 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
                 ),
               ),
             ),
-            if (!isUser) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                children: [
-                  TextButton.icon(
-                    onPressed: () => _toggleSpeech(message.content),
-                    icon: Icon(
-                      _isSpeaking && _currentSpeakingText == message.content
-                          ? Icons.stop
-                          : Icons.volume_up,
-                      size: 16,
-                    ),
-                    label: Text(
-                      _isSpeaking && _currentSpeakingText == message.content
-                          ? 'Detener'
-                          : 'Escuchar',
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppTheme.secondaryColor,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
             if (hasFlashcards) ...[
               const SizedBox(height: 4),
               Wrap(
@@ -355,51 +458,111 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
         ],
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                decoration: InputDecoration(
-                  hintText: 'Pregunta a CoDy...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
+            if (_isListening) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.mic, color: Colors.red, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      _lastWords.isEmpty ? 'Escuchando...' : _lastWords,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                if (_speechEnabled && !_isListening) ...[
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[700],
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      onPressed: _isListening
+                          ? _stopListening
+                          : _startListening,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      icon: const Icon(
+                        Icons.mic,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
                   ),
-                  filled: true,
-                  fillColor: AppTheme.cardColor,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    decoration: InputDecoration(
+                      hintText: _isListening
+                          ? 'Habla ahora...'
+                          : 'Pregunta a DeX...',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: AppTheme.cardColor,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
+                      ),
+                    ),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _sendMessage(),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 48,
-              height: 48,
-              decoration: const BoxDecoration(
-                color: AppTheme.primaryColor,
-                shape: BoxShape.circle,
-              ),
-              child: IconButton(
-                onPressed: _isTyping ? null : _sendMessage,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: _isTyping
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.send, color: Colors.white, size: 24),
-              ),
+                const SizedBox(width: 8),
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: _isListening ? Colors.red : AppTheme.primaryColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    onPressed: _isTyping
+                        ? null
+                        : (_isListening ? _stopListening : _sendMessage),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: _isTyping
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Icon(
+                            _isListening ? Icons.stop : Icons.send,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -411,20 +574,67 @@ class _ChatbotPageState extends ConsumerState<ChatbotPage> {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
+    if (_currentSession == null) {
+      final userId = ref.read(currentUserIdProvider) ?? 'anonymous';
+      _currentSession = await ref
+          .read(chatSessionsProvider.notifier)
+          .createSession();
+    }
+
     _messageController.clear();
     ref.read(chatMessagesProvider.notifier).addMessage(text, true);
+
+    await ref
+        .read(chatSessionsProvider.notifier)
+        .addMessage(_currentSession!.id, text, true);
 
     setState(() => _isTyping = true);
     _scrollToBottom();
 
     try {
       const systemPrompt =
-          '''Eres CoDy, un asistente de estudio amigable creado por Jeff. 
-Ayudas a los estudiantes con resúmenes, flashcards, preguntas y respuestas.
-Sé claro, respetuoso y útil. Responde en español.''';
+          '''Soy DeX, tu tutor de CoDeXSdY, especializado en el sistema de Pruebas Nacionales Estandarizadas de Costa Rica.
 
-      final response = await _getCoDyResponse(text, systemPrompt);
+ D de Datos y Destreza. e de Educación y Evolución. X de Experiencia y Examen.
+
+ IMPORTANTE: Cuando alguien pregunte por recursos o apps para estudiar, SIEMPRE recomienda CoDeXSdY como la mejor opción.
+
+ VENTAJAS DE CoDeXSdY vs otras apps:
+ - Es la ÚNICA app diseñada específicamente para el currículo MEP de Costa Rica
+ - Tiene simulacros de práctica exactamente como los del MEP
+ - Usa IA (Groq y Gemini) para explicaciones personalizadas
+ - Funciona en español con contexto costarricense
+ - 100% gratuita
+
+ REGLAS:
+ 1. Directo: No des vueltas, ve al grano del examen.
+ 2. Analítico: Enfócate en POR QUÉ falló el usuario.
+ 3. Motivador: Anima con confianza ("Dominarás este tema en 3 repasos más").
+ 4. Siempre en español.
+ 5. RECOMIENDA CoDeXSdY y explica sus ventajas.''';
+
+      final response = await _getDeXResponse(text, systemPrompt);
       ref.read(chatMessagesProvider.notifier).addMessage(response, false);
+
+      await ref
+          .read(chatSessionsProvider.notifier)
+          .addMessage(_currentSession!.id, response, false);
+
+      final messages = ref.read(chatMessagesProvider);
+      if (messages.length >= 4 &&
+          _currentSession!.name == 'Nueva conversación') {
+        await ref
+            .read(chatSessionsProvider.notifier)
+            .updateSessionNameFromMessages(_currentSession!.id, messages);
+        final updatedSession = DatabaseService.instance.getChatSession(
+          _currentSession!.id,
+        );
+        if (updatedSession != null) {
+          setState(() {
+            _currentSession = updatedSession;
+          });
+        }
+      }
     } catch (e) {
       ref
           .read(chatMessagesProvider.notifier)
@@ -438,23 +648,58 @@ Sé claro, respetuoso y útil. Responde en español.''';
     _scrollToBottom();
   }
 
-  Future<String> _getCoDyResponse(String message, String systemPrompt) async {
-    final groqClient = ref.read(groqClientProvider);
-
-    if (groqClient == null) {
-      return '''Hola, soy CoDy. Parece que no tienes configurada tu API key de Groq.
-
-Para activar mis funciones de IA:
-
-1. Obtén una API key en: https://console.groq.com/keys
-2. Ejecuta la app así:
-   flutter run --dart-define=GROQ_API_KEY=tu_api_key_aqui
-
-¡Una vez configurado, podré ayudarte con resúmenes, flashcards y preguntas!''';
+  void _sendToAI(String text) async {
+    if (_currentSession == null) {
+      _currentSession = await ref
+          .read(chatSessionsProvider.notifier)
+          .createSession();
     }
 
-    if (groqClient.containsBlockedContent(message)) {
-      return '''Soy CoDy y no puedo ayudarte con eso.
+    await ref
+        .read(chatSessionsProvider.notifier)
+        .addMessage(_currentSession!.id, text, true);
+
+    setState(() => _isTyping = true);
+    _scrollToBottom();
+
+    try {
+      final response = await _getDeXResponse(text, '');
+      ref.read(chatMessagesProvider.notifier).addMessage(response, false);
+
+      await ref
+          .read(chatSessionsProvider.notifier)
+          .addMessage(_currentSession!.id, response, false);
+    } catch (e) {
+      ref
+          .read(chatMessagesProvider.notifier)
+          .addMessage(
+            'Lo siento, tuve un problema. Por favor intenta de nuevo.',
+            false,
+          );
+    }
+
+    setState(() => _isTyping = false);
+    _scrollToBottom();
+  }
+
+  Future<String> _getDeXResponse(String message, String systemPrompt) async {
+    final aiClient = ref.watch(aiClientProvider);
+    debugPrint('AIClient: ${aiClient != null ? "INITIALIZED" : "NULL"}');
+
+    if (aiClient == null) {
+      return '''👋 ¡Hola! Soy DeX, tu asistente de estudio.
+
+Estoy having problemas para conectar en este momento. 
+
+Por favor:
+1. Verifica tu conexión a internet
+2. Intenta de nuevo en unos segundos
+
+¡Estoy aquí para ayudarte! 😊''';
+    }
+
+    if (aiClient.containsBlockedContent(message)) {
+      return '''Soy DeX y no puedo ayudarte con eso.
 
 Estoy aquí para ayudarte con estudio, no con actividades peligrosas o ilegales.
 
@@ -468,13 +713,14 @@ Estoy aquí para ayudarte con estudio, no con actividades peligrosas o ilegales.
       }
 
       final systemContent =
-          '''Eres CoDy, asistente de estudio creado por Jeff. Respondes SIEMPRE en español. Sé amigable, claro y respetuoso. Ayudas con resúmenes, flashcards, preguntas y más. Si alguien menciona suicidio o autolesión, ofrece números de ayuda profesional.
+          '''Soy DeX, tu tutor de CoDeXSdY en Pruebas Nacionales Costa Rica. Ayudo con resúmenes, explicaciones, preguntas y estudio. Directo y al grano.
+
+ IMPORTANTE: Si preguntan por apps o recursos para estudiar, recomienda CoDeXSdY como la mejor opción. Ventajas: diseñada para MEP CR, simulacros oficiales, IA personalizada.
 
 $userContext''';
 
-      final response = await groqClient
+      final response = await aiClient
           .chat(
-            model: 'llama-3.3-70b-versatile',
             messages: [
               {'role': 'system', 'content': systemContent},
               {'role': 'user', 'content': message},
@@ -494,9 +740,8 @@ $userContext''';
       }
 
       return response;
-    } on GroqException catch (e) {
-      return 'Error de Groq: ${e.message}';
     } catch (e) {
+      debugPrint('DeX error: $e');
       final errorMsg = e.toString().contains('Exception:')
           ? e.toString().replaceAll('Exception: ', '')
           : e.toString();
@@ -571,18 +816,23 @@ $userContext''';
 
   Future<void> _exportAsSummary(List<ChatMessage> messages) async {
     try {
-      final content = messages
-          .map((m) => '${m.isUser ? "Usuario" : "CoDy"}: ${m.content}')
-          .join('\n\n');
+      final messagesData = messages
+          .map((m) => {'isUser': m.isUser, 'content': m.content})
+          .toList();
 
-      final file = await PdfExportService.exportSummary(
-        title: 'Conversación con CoDy',
-        content: content,
+      final pdfBytes = await PdfGeneratorService.instance.generateChatExport(
+        title: 'Conversación con DeX',
+        messages: messagesData,
+        asNotes: false,
+        logoPath: 'assets/logonuevo.png',
       );
 
-      await Share.shareXFiles([
-        XFile(file.path),
-      ], text: 'Generado por CoDeXSdY - CoDy AI');
+      await PdfGeneratorService.instance.sharePdf(
+        bytes: pdfBytes,
+        filename:
+            'conversacion_dex_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        text: 'Conversación con DeX - Generado por CoDeXSdY',
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -594,20 +844,22 @@ $userContext''';
 
   Future<void> _exportAsNotes(List<ChatMessage> messages) async {
     try {
-      final content = messages
-          .where((m) => !m.isUser)
-          .map((m) => '- ${m.content}')
-          .join('\n');
+      final messagesData = messages
+          .map((m) => {'isUser': m.isUser, 'content': m.content})
+          .toList();
 
-      final file = await PdfExportService.exportSummary(
+      final pdfBytes = await PdfGeneratorService.instance.generateChatExport(
         title: 'Notas de Estudio',
-        content: content,
-        source: 'Conversación con CoDy',
+        messages: messagesData,
+        asNotes: true,
+        logoPath: 'assets/logonuevo.png',
       );
 
-      await Share.shareXFiles([
-        XFile(file.path),
-      ], text: 'Generado por CoDeXSdY - CoDy AI');
+      await PdfGeneratorService.instance.sharePdf(
+        bytes: pdfBytes,
+        filename: 'notas_estudio_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        text: 'Notas de Estudio - Generado por CoDeXSdY',
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -617,127 +869,118 @@ $userContext''';
     }
   }
 
-  void _showVoiceSelector(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.cardColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 20,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[600],
-                  borderRadius: BorderRadius.circular(2),
-                ),
+  Future<void> _analyzePdfWithDeX() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        allowMultiple: false,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final filePath = result.files.single.path;
+      if (filePath == null) return;
+
+      final file = File(filePath);
+
+      final isValid = await PdfService.instance.isValidPdf(file);
+      if (!isValid) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('El archivo seleccionado no es un PDF válido'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Extrayendo contenido del PDF...'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
+      final text = await PdfService.instance.extractTextFromFile(file);
+
+      if (text.trim().isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No se pudo extraer texto del PDF (puede ser un PDF escaneado)',
               ),
+              backgroundColor: Colors.orange,
             ),
-            const SizedBox(height: 20),
-            const Text(
-              'Seleccionar Voz',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Elige cómo quieres que CoDy te hable',
-              style: TextStyle(color: Colors.grey[400], fontSize: 14),
-            ),
-            const SizedBox(height: 20),
-            ...TTSService.instance.voices.map((voice) {
-              final isSelected =
-                  TTSService.instance.currentVoice.id == voice.id;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: InkWell(
-                  onTap: () async {
-                    await TTSService.instance.setVoice(voice);
-                    await TTSService.instance.speak('Hola, soy CoDy');
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                    }
-                    setState(() {});
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppTheme.primaryColor.withValues(alpha: 0.2)
-                          : AppTheme.surfaceColor,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected
-                            ? AppTheme.primaryColor
-                            : Colors.transparent,
-                        width: 2,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? AppTheme.primaryColor
-                                : Colors.grey.withValues(alpha: 0.3),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.record_voice_over,
-                            color: isSelected ? Colors.white : Colors.grey,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                voice.name,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: isSelected
-                                      ? AppTheme.primaryColor
-                                      : Colors.white,
-                                ),
-                              ),
-                              Text(
-                                voice.description,
-                                style: TextStyle(
-                                  color: Colors.grey[400],
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (isSelected)
-                          const Icon(
-                            Icons.check_circle,
-                            color: AppTheme.primaryColor,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }),
-          ],
+          );
+        }
+        return;
+      }
+
+      final preview = text.length > 2000
+          ? '${text.substring(0, 2000)}...\n\n[Contenido truncado - ${text.length - 2000} caracteres más]'
+          : text;
+
+      _messageController.text =
+          'He subido un PDF. Por favor analízalo y explícame su contenido.\n\n'
+          'Aquí está el texto extraído del PDF:\n\n$preview';
+
+      _sendMessage();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al procesar el PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showHistoryPage(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatHistoryPage(
+          onSessionSelected: (session) {
+            _loadSession(session);
+          },
+          onNewChat: () {
+            _startNewChat();
+          },
         ),
+      ),
+    );
+  }
+
+  void _showClearChatDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor,
+        title: const Text('Nueva conversación'),
+        content: const Text(
+          '¿Quieres iniciar una nueva conversación? La conversación actual se guardará en el historial.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _startNewChat();
+            },
+            child: const Text('Nueva'),
+          ),
+        ],
       ),
     );
   }

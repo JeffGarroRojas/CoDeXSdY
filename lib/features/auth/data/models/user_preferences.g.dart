@@ -28,13 +28,15 @@ class UserPreferencesAdapter extends TypeAdapter<UserPreferences> {
       ..learningStyle = fields[8] as String?
       ..onboardingCompleted = fields[9] as bool
       ..createdAt = fields[10] as DateTime
-      ..updatedAt = fields[11] as DateTime;
+      ..updatedAt = fields[11] as DateTime
+      ..isGuest = fields[12] as bool
+      ..guestSessionStart = fields[13] as DateTime?;
   }
 
   @override
   void write(BinaryWriter writer, UserPreferences obj) {
     writer
-      ..writeByte(12)
+      ..writeByte(14)
       ..writeByte(0)
       ..write(obj.odId)
       ..writeByte(1)
@@ -58,7 +60,11 @@ class UserPreferencesAdapter extends TypeAdapter<UserPreferences> {
       ..writeByte(10)
       ..write(obj.createdAt)
       ..writeByte(11)
-      ..write(obj.updatedAt);
+      ..write(obj.updatedAt)
+      ..writeByte(12)
+      ..write(obj.isGuest)
+      ..writeByte(13)
+      ..write(obj.guestSessionStart);
   }
 
   @override

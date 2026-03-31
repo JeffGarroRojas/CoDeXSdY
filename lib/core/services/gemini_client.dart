@@ -1,7 +1,8 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class GeminiClient {
-  static const String apiKey = 'AIzaSyBREEvgAz9Iw7faM8YLjQ3XNEsWNkw4K98';
+  static String get apiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
   static const String baseUrl =
       'https://generativelanguage.googleapis.com/v1beta';
   static const String defaultModel = 'gemini-2.5-flash';
@@ -507,6 +508,67 @@ Cada pregunta debe tener:
     } on DioException catch (e) {
       throw GeminiException(
         message: e.message ?? 'Error analyzing image',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<String> extractTextFromImage({
+    required String imageBase64,
+    String model = 'gemini-1.5-flash',
+  }) async {
+    await _waitForRateLimit();
+
+    try {
+      final requestData = {
+        'contents': [
+          {
+            'parts': [
+              {
+                'text':
+                    'Extrae TODO el texto visible en esta imagen. Si hay texto, devuélvelo completo y literal. Si no hay texto claro, describe brevemente qué ves (temas, diagramas, etc).',
+              },
+              {
+                'inlineData': {'mimeType': 'image/jpeg', 'data': imageBase64},
+              },
+            ],
+          },
+        ],
+        'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 1024},
+      };
+
+      final response = await _dio.post(
+        '/models/$model:generateContent',
+        queryParameters: {'key': apiKey},
+        data: requestData,
+      );
+
+      final data = response.data;
+      String text = '';
+
+      if (data['candidates'] != null) {
+        final candidates = data['candidates'] as List;
+        if (candidates.isNotEmpty) {
+          final candidate = candidates[0];
+          final content = candidate['content'];
+          if (content != null) {
+            final parts = content['parts'];
+            if (parts != null && parts is List && parts.isNotEmpty) {
+              for (var part in parts) {
+                if (part['text'] != null &&
+                    part['text'].toString().isNotEmpty) {
+                  text += part['text'];
+                }
+              }
+            }
+          }
+        }
+      }
+
+      return text.trim();
+    } on DioException catch (e) {
+      throw GeminiException(
+        message: e.message ?? 'Error extracting text from image',
         statusCode: e.response?.statusCode,
       );
     }

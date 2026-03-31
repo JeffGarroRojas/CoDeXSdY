@@ -368,4 +368,41 @@ ESQUEMA DE DATOS (JSON)
       maxTokens: 6000,
     );
   }
+
+  Future<String> analyzeImageText({
+    required String extractedText,
+    String subject = 'general',
+  }) async {
+    return chat(
+      messages: [
+        {
+          'role': 'system',
+          'content':
+              '''Soy DeX, tu tutor de CoDeXSdY especializado en Pruebas Nacionales de Costa Rica.
+
+Analiza el contenido proporcionado y responde de forma útil:
+
+REGLAS:
+1. Identifica el tema o materia
+2. Explica los conceptos principales de forma simple
+3. Genera 2-3 preguntas de práctica tipo MEP con respuestas
+4. Sé directo y conciso
+5. Siempre en español''',
+        },
+        {
+          'role': 'user',
+          'content':
+              '''Analiza este contenido de estudio:
+
+$extractedText
+
+Responde con:
+- Tema identificado
+- Explicación breve
+- 2-3 preguntas tipo MEP''',
+        },
+      ],
+      maxTokens: 1500,
+    );
+  }
 }

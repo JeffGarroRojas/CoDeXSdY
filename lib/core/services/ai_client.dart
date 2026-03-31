@@ -259,6 +259,24 @@ class AIClient {
     );
   }
 
+  Future<String> extractTextAndAnalyze({
+    required String imageBase64,
+    String subject = 'general',
+  }) async {
+    final extractedText = await _geminiClient.extractTextFromImage(
+      imageBase64: imageBase64,
+    );
+
+    if (extractedText.isEmpty) {
+      return 'No pude extraer texto de la imagen. Intenta tomar una foto más clara.';
+    }
+
+    return await _groqClient.analyzeImageText(
+      extractedText: extractedText,
+      subject: subject,
+    );
+  }
+
   bool containsBlockedContent(String text) {
     return _geminiClient.containsBlockedContent(text);
   }

@@ -257,10 +257,8 @@ class _DeXMenuSheetState extends ConsumerState<_DeXMenuSheet> {
           final aiClient = ref.read(aiClientProvider);
 
           if (aiClient != null) {
-            final response = await aiClient.analyzeImage(
+            final response = await aiClient.extractTextAndAnalyze(
               imageBase64: base64Image,
-              prompt:
-                  'Eres DeX, asistente de estudio costarricense. Analiza esta imagen de apuntes del estudiante: 1) Identifica el tema o materia, 2) Explica los conceptos principales de forma simple, 3) Genera 2-3 preguntas de práctica tipo MEP con respuestas.',
             );
 
             if (mounted) {
@@ -307,10 +305,10 @@ class _DeXMenuSheetState extends ConsumerState<_DeXMenuSheet> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('DeX analiza tu foto...'),
+                  Text('DeX procesando...'),
                   SizedBox(height: 4),
                   Text(
-                    'Procesando imagen',
+                    'Extrayendo texto y analizando',
                     style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 ],

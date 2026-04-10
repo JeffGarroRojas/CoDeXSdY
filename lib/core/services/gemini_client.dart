@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'logging_service.dart';
 
 class GeminiClient {
   static String get apiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
@@ -583,24 +584,4 @@ class GeminiException implements Exception {
 
   @override
   String toString() => 'GeminiException: $message (Status: $statusCode)';
-}
-
-class LoggingService {
-  static final LoggingService instance = LoggingService._();
-  LoggingService._();
-
-  void debug(String message, {String? source}) {
-    print('🔍 [${source ?? "App"}] $message');
-  }
-
-  void warning(String message, {String? source}) {
-    print('⚠️ [${source ?? "App"}] $message');
-  }
-
-  void error(String message, {String? source, dynamic error}) {
-    print('❌ [${source ?? "App"}] $message');
-    if (error != null) {
-      print('Error: $error');
-    }
-  }
 }

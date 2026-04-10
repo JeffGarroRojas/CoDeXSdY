@@ -22,9 +22,6 @@ class User extends HiveObject {
   @HiveField(5)
   DateTime? lastLogin;
 
-  @HiveField(6)
-  String? firebaseUid;
-
   User();
 
   User.create({
@@ -32,7 +29,6 @@ class User extends HiveObject {
     required this.email,
     this.name,
     this.isAdmin = false,
-    this.firebaseUid,
   }) : createdAt = DateTime.now();
 
   Map<String, dynamic> toMap() => {
@@ -42,7 +38,6 @@ class User extends HiveObject {
     'createdAt': createdAt.toIso8601String(),
     'isAdmin': isAdmin,
     'lastLogin': lastLogin?.toIso8601String(),
-    'firebaseUid': firebaseUid,
   };
 
   factory User.fromMap(Map<String, dynamic> map) {
@@ -56,8 +51,7 @@ class User extends HiveObject {
       ..isAdmin = map['isAdmin'] ?? false
       ..lastLogin = map['lastLogin'] != null
           ? DateTime.parse(map['lastLogin'])
-          : null
-      ..firebaseUid = map['firebaseUid'];
+          : null;
     return user;
   }
 }

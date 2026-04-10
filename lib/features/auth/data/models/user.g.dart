@@ -22,14 +22,13 @@ class UserAdapter extends TypeAdapter<User> {
       ..name = fields[2] as String?
       ..createdAt = fields[3] as DateTime
       ..isAdmin = fields[4] as bool
-      ..lastLogin = fields[5] as DateTime?
-      ..firebaseUid = fields[6] as String?;
+      ..lastLogin = fields[5] as DateTime?;
   }
 
   @override
   void write(BinaryWriter writer, User obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -41,9 +40,7 @@ class UserAdapter extends TypeAdapter<User> {
       ..writeByte(4)
       ..write(obj.isAdmin)
       ..writeByte(5)
-      ..write(obj.lastLogin)
-      ..writeByte(6)
-      ..write(obj.firebaseUid);
+      ..write(obj.lastLogin);
   }
 
   @override

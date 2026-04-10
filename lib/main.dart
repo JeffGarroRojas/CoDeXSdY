@@ -1,46 +1,30 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/database_service.dart';
 import 'core/services/logging_service.dart';
 import 'core/services/notification_service.dart';
-import 'core/services/update_service.dart';
 import 'core/providers/app_providers.dart';
-import 'core/widgets/animated_border.dart';
 import 'features/documents/presentation/pages/home_page.dart';
 import 'features/ai_assistant/presentation/pages/chatbot_page.dart';
 import 'features/flashcards/presentation/pages/study_page.dart';
 import 'features/documents/presentation/pages/profile_page.dart';
 import 'features/auth/presentation/pages/auth_page.dart';
 import 'features/auth/presentation/pages/intro_page.dart';
-import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await dotenv.load(fileName: ".env");
 
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (e) {
-    debugPrint('Firebase init error: $e');
-  }
-
   await DatabaseService.instance.init();
   await LoggingService.instance.init();
   await NotificationService.instance.init();
   await NotificationService.instance.requestPermissions();
-  await UpdateService.instance.init();
 
-  LoggingService.instance.info('CoDeXSdY started', source: 'App');
+  LoggingService.instance.info('CoDeXSdY started (Local Mode)', source: 'App');
 
   runApp(const ProviderScope(child: CoDeXSdYApp()));
 }
@@ -57,30 +41,6 @@ class CoDeXSdYApp extends ConsumerWidget {
       home: const SplashPage(),
     );
   }
-}
-
-class SplashPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF6366F1).withValues(alpha: 0.1)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(Offset(size.width * 0.1, size.height * 0.2), 80, paint);
-    canvas.drawCircle(Offset(size.width * 0.9, size.height * 0.3), 120, paint);
-    canvas.drawCircle(Offset(size.width * 0.5, size.height * 0.9), 150, paint);
-    canvas.drawCircle(Offset(size.width * 0.8, size.height * 0.7), 60, paint);
-
-    final paint2 = Paint()
-      ..color = const Color(0xFF22D3EE).withValues(alpha: 0.08)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(Offset(size.width * 0.3, size.height * 0.5), 100, paint2);
-    canvas.drawCircle(Offset(size.width * 0.7, size.height * 0.8), 80, paint2);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class SplashPage extends StatefulWidget {
@@ -110,9 +70,9 @@ class _SplashPageState extends State<SplashPage>
   }
 
   Future<void> _initializeAndNavigate() async {
-    await Future.delayed(const Duration(milliseconds: 3500));
+    await Future.delayed(const Duration(milliseconds: 2500));
     if (mounted) {
-      _checkForUpdates();
+      _navigateToAuth();
     }
   }
 
@@ -135,11 +95,11 @@ class _SplashPageState extends State<SplashPage>
                         width: 200 * _progressAnimation.value,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          gradient: LinearGradient(
+                          gradient: const LinearGradient(
                             colors: [
-                              const Color(0xFF6366F1),
-                              const Color(0xFF8B5CF6),
-                              const Color(0xFF22D3EE),
+                              Color(0xFF6366F1),
+                              Color(0xFF8B5CF6),
+                              Color(0xFF22D3EE),
                             ],
                           ),
                           boxShadow: [
@@ -186,10 +146,10 @@ class _SplashPageState extends State<SplashPage>
           height: 10,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: LinearGradient(
+            gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [const Color(0xFF6366F1), const Color(0xFF22D3EE)],
+              colors: [Color(0xFF6366F1), Color(0xFF22D3EE)],
             ),
             boxShadow: [
               BoxShadow(
@@ -207,159 +167,6 @@ class _SplashPageState extends State<SplashPage>
         );
   }
 
-  Future<void> _checkForUpdates() async {
-    final updateInfo = await UpdateService.instance.checkForUpdates();
-
-    if (!mounted) return;
-
-    if (updateInfo.type == UpdateType.shorebird) {
-      _showShorebirdUpdateDialog(updateInfo);
-    } else if (updateInfo.type == UpdateType.required) {
-      _showRequiredUpdateDialog(updateInfo);
-    } else {
-      _navigateToAuth();
-    }
-  }
-
-  void _showShorebirdUpdateDialog(UpdateInfo info) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.system_update, color: Colors.green[400]),
-            const SizedBox(width: 12),
-            const Text('Actualización disponible'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(info.message ?? 'Hay una nueva actualización disponible.'),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.offline_bolt, color: Colors.blue),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Se descargará en segundo plano. '
-                      'La app se actualizará automáticamente.',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[300]),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _navigateToAuth();
-            },
-            child: const Text('Más tarde'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await UpdateService.instance.downloadAndApplyUpdate();
-              _navigateToAuth();
-            },
-            child: const Text('Actualizar ahora'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showRequiredUpdateDialog(UpdateInfo info) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.update, color: Colors.orange[400]),
-            const SizedBox(width: 12),
-            const Text('Nueva versión'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(info.message ?? 'Hay una nueva versión disponible.'),
-            const SizedBox(height: 16),
-            if (info.version != null)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'Versión: ${info.version}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.orange[300],
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_amber, color: Colors.orange),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Esta actualización es requerida. '
-                      'Descarga el APK para continuar.',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[300]),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton.icon(
-            onPressed: () async {
-              if (info.downloadUrl != null) {
-                final uri = Uri.parse(info.downloadUrl!);
-                if (await canLaunchUrl(uri)) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
-              }
-            },
-            icon: const Icon(Icons.download),
-            label: const Text('Descargar APK'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _navigateToAuth() {
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
@@ -369,14 +176,14 @@ class _SplashPageState extends State<SplashPage>
           return FadeTransition(
             opacity: animation,
             child: Container(
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    const Color(0xFF6366F1),
-                    const Color(0xFF1E1E2E),
-                    const Color(0xFF0F0F1A),
+                    Color(0xFF6366F1),
+                    Color(0xFF1E1E2E),
+                    Color(0xFF0F0F1A),
                   ],
                 ),
               ),
@@ -398,17 +205,17 @@ class _SplashPageState extends State<SplashPage>
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              const Color(0xFF6366F1),
-              const Color(0xFF8B5CF6),
-              const Color(0xFF1E1E2E),
-              const Color(0xFF0F0F1A),
+              Color(0xFF6366F1),
+              Color(0xFF8B5CF6),
+              Color(0xFF1E1E2E),
+              Color(0xFF0F0F1A),
             ],
-            stops: const [0.0, 0.3, 0.7, 1.0],
+            stops: [0.0, 0.3, 0.7, 1.0],
           ),
         ),
         child: Center(
@@ -508,12 +315,12 @@ class _SplashPageState extends State<SplashPage>
                               height: 130,
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(30),
-                                gradient: LinearGradient(
+                                gradient: const LinearGradient(
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                   colors: [
-                                    const Color(0xFF6366F1),
-                                    const Color(0xFF8B5CF6),
+                                    Color(0xFF6366F1),
+                                    Color(0xFF8B5CF6),
                                   ],
                                 ),
                                 boxShadow: [
@@ -577,7 +384,7 @@ class _SplashPageState extends State<SplashPage>
                       ),
                   const SizedBox(height: 12),
                   Text(
-                    'Tu asistente de estudio con IA',
+                    'Tu asistente de estudio con IA (Local)',
                     style: TextStyle(
                       fontFamily: 'Aquire',
                       fontSize: 16,
@@ -632,7 +439,11 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
   }
 
   void _handleLogin() {
-    ref.read(currentUserIdProvider.notifier).state = 'authenticated';
+    final userId = 'local_user_${DateTime.now().millisecondsSinceEpoch}';
+    ref.read(currentUserIdProvider.notifier).state = userId;
+    DatabaseService.instance.setCurrentUserId(userId);
+    DatabaseService.instance.setGuestSession(false);
+
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
@@ -654,8 +465,7 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
     );
   }
 
-  Future<void> _handleGuestMode() async {
-    await FirebaseAuth.instance.signOut();
+  void _handleGuestMode() {
     final guestId = 'guest_${DateTime.now().millisecondsSinceEpoch}';
     ref.read(currentUserIdProvider.notifier).state = guestId;
     DatabaseService.instance.setGuestUserId(guestId);

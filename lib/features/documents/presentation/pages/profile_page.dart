@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import '../../../../core/providers/app_providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/services/database_service.dart';
-import '../../../../core/services/update_service.dart';
-import '../../../../core/providers/app_providers.dart' as app;
 import '../../data/models/user_profile.dart';
 
 class ProfilePage extends ConsumerStatefulWidget {
@@ -19,121 +15,6 @@ class ProfilePage extends ConsumerStatefulWidget {
 }
 
 class _ProfilePageState extends ConsumerState<ProfilePage> {
-  bool _hasUpdate = false;
-  bool _checkingUpdate = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkForUpdatesOnLoad();
-  }
-
-  Future<void> _checkForUpdatesOnLoad() async {
-    await Future.delayed(Duration(milliseconds: 500));
-    if (mounted) {
-      await _checkForUpdates(context);
-    }
-  }
-
-  Future<void> _checkForUpdates(BuildContext context) async {
-    if (_checkingUpdate) return;
-    setState(() => _checkingUpdate = true);
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.cardColor,
-        content: Row(
-          children: [
-            const CircularProgressIndicator(strokeWidth: 2),
-            const SizedBox(width: 16),
-            Text(
-              'Buscando actualizaciones...',
-              style: TextStyle(color: Colors.grey[300]),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final updateInfo = await UpdateService.instance.checkForUpdates();
-
-    if (mounted) {
-      Navigator.pop(context);
-      setState(() {
-        _hasUpdate = updateInfo.type != UpdateType.none;
-        _checkingUpdate = false;
-      });
-
-      if (updateInfo.type != UpdateType.none) {
-        _showUpdateDialog(context, updateInfo);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('¡Ya tienes la última versión!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    }
-  }
-
-  void _showUpdateDialog(BuildContext context, UpdateInfo updateInfo) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.cardColor,
-        title: Row(
-          children: [
-            const Icon(Icons.system_update, color: Colors.green, size: 28),
-            const SizedBox(width: 8),
-            const Text('Actualización Disponible'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Versión: 1.3.3',
-              style: TextStyle(color: Colors.grey[400], fontSize: 14),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              '¿Qué hay de nuevo?',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '• Historial de chat guardado\n'
-              '• IA ya no se congela al generar contenido\n'
-              '• 3 intentos de reintento automático\n'
-              '• Timeout aumentado a 2 minutos',
-              style: TextStyle(color: Colors.grey[300], fontSize: 13),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Más tarde', style: TextStyle(color: Colors.grey[400])),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryColor,
-            ),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await UpdateService.instance.downloadAndApplyUpdate();
-            },
-            child: const Text('Actualizar'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final userId = ref.watch(currentUserIdProvider) ?? 'guest';
@@ -172,10 +53,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     UserProfile profile,
     bool isGuest,
   ) {
-    final user = FirebaseAuth.instance.currentUser;
-    final email = user?.email ?? profile.email ?? 'Sin email';
-    final displayName =
-        user?.displayName ?? profile.name ?? (isGuest ? 'Invitado' : 'Usuario');
+    final displayName = profile.name ?? (isGuest ? 'Invitado' : 'Usuario');
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -216,7 +94,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
-          Text(email, style: TextStyle(fontSize: 14, color: Colors.grey[400])),
+          Text(
+            isGuest ? 'Modo Invitado (Local)' : 'Cuenta Local',
+            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+          ),
           if (isGuest) ...[
             const SizedBox(height: 12),
             Container(
@@ -350,14 +231,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           ),
           child: Column(
             children: [
-              if (isGuest) ...[
-                _buildSettingsTile(
-                  'Crear Cuenta',
-                  Icons.person_add,
-                  () => _showCreateAccountSheet(context, ref),
-                ),
-                const Divider(height: 1),
-              ],
               _buildSettingsTile(
                 'Recordatorios',
                 Icons.notifications_outlined,
@@ -371,10 +244,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               ),
               const Divider(height: 1),
               _buildSettingsTile(
-                'Actualizar Versión',
-                Icons.system_update,
-                () => _checkForUpdates(context),
-                trailing: _UpdateBadge(hasUpdate: _hasUpdate),
+                'Borrar Datos',
+                Icons.delete_outline,
+                () => _showClearDataDialog(context),
+                iconColor: Colors.red,
               ),
             ],
           ),
@@ -387,32 +260,56 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     String title,
     IconData icon,
     VoidCallback onTap, {
-    Widget? trailing,
+    Color? iconColor,
   }) {
     return ListTile(
-      leading: Icon(icon, color: AppTheme.primaryColor),
+      leading: Icon(icon, color: iconColor ?? AppTheme.primaryColor),
       title: Text(title),
-      trailing: trailing ?? const Icon(Icons.chevron_right),
+      trailing: const Icon(Icons.chevron_right),
       onTap: onTap,
     );
   }
 
-  void _showCreateAccountSheet(BuildContext context, WidgetRef ref) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (ctx) => ProviderScope(
-          child: _AuthFullScreen(
-            onComplete: () {
-              Navigator.of(context).popUntil((route) => route.isFirst);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('¡Cuenta creada exitosamente!'),
-                  backgroundColor: Colors.green,
-                ),
-              );
-            },
-          ),
+  void _showClearDataDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.cardColor,
+        title: const Row(
+          children: [
+            Icon(Icons.delete_forever, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Borrar Datos'),
+          ],
         ),
+        content: const Text(
+          '¿Estás seguro de que quieres borrar todos tus datos locales? '
+          'Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await DatabaseService.instance.clearUserData(
+                ref.read(currentUserIdProvider) ?? 'guest',
+              );
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Datos borrados correctamente'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            },
+            child: const Text('Borrar'),
+          ),
+        ],
       ),
     );
   }
@@ -587,7 +484,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       } catch (e) {
                         Navigator.pop(ctx);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
+                          const SnackBar(
                             content: Text(
                               'Activa los permisos de alarma en configuración',
                             ),
@@ -660,11 +557,16 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               child: const Icon(Icons.smart_toy, size: 40, color: Colors.white),
             ),
             const SizedBox(height: 16),
-            const Text('Versión 1.3.2'),
+            const Text('Versión 1.4.0 (Local)'),
             const SizedBox(height: 8),
             Text(
               'Asistente de estudio con IA',
               style: TextStyle(color: Colors.grey[400]),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '100% datos locales',
+              style: TextStyle(color: Colors.green[400], fontSize: 12),
             ),
             const SizedBox(height: 16),
             const Text('Creado por Jeff'),
@@ -678,359 +580,5 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         ],
       ),
     );
-  }
-}
-
-class _UpdateBadge extends StatefulWidget {
-  final bool hasUpdate;
-
-  const _UpdateBadge({required this.hasUpdate});
-
-  @override
-  State<_UpdateBadge> createState() => _UpdateBadgeState();
-}
-
-class _UpdateBadgeState extends State<_UpdateBadge>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 1000),
-      vsync: this,
-    )..repeat(reverse: true);
-    _animation = Tween<double>(
-      begin: 0.8,
-      end: 1.2,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.hasUpdate) {
-      return const SizedBox.shrink();
-    }
-    return ScaleTransition(
-      scale: _animation,
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: const BoxDecoration(
-          color: Colors.red,
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(Icons.system_update, color: Colors.white, size: 14),
-      ),
-    );
-  }
-}
-
-class _AuthFullScreen extends ConsumerStatefulWidget {
-  final VoidCallback onComplete;
-
-  const _AuthFullScreen({required this.onComplete});
-
-  @override
-  ConsumerState<_AuthFullScreen> createState() => _AuthFullScreenState();
-}
-
-class _AuthFullScreenState extends ConsumerState<_AuthFullScreen> {
-  bool _isLogin = true;
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
-  String? _errorMessage;
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const Spacer(),
-                  ],
-                ),
-                const SizedBox(height: 40),
-                Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: SweepGradient(
-                      colors: [
-                        AppTheme.primaryColor,
-                        AppTheme.secondaryColor,
-                        AppTheme.primaryColor,
-                      ],
-                    ),
-                  ),
-                  child: Container(
-                    margin: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF161B22),
-                      shape: BoxShape.circle,
-                    ),
-                    child: ClipOval(
-                      child: Image.asset(
-                        'assets/logonuevo.png',
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const Icon(
-                          Icons.smart_toy,
-                          size: 50,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 40),
-                Text(
-                  _isLogin ? 'Inicia sesión' : 'Crea tu cuenta',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
-                if (!_isLogin) ...[
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: InputDecoration(
-                      labelText: 'Nombre',
-                      prefixIcon: const Icon(Icons.person),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    validator: (v) =>
-                        v?.isEmpty ?? true ? 'Ingresa tu nombre' : null,
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(
-                    labelText: 'Email',
-                    prefixIcon: const Icon(Icons.email),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  validator: (v) {
-                    if (v?.isEmpty ?? true) return 'Ingresa tu email';
-                    if (!v!.contains('@')) return 'Email inválido';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Contraseña',
-                    prefixIcon: const Icon(Icons.lock),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  validator: (v) {
-                    if (v?.isEmpty ?? true) return 'Ingresa tu contraseña';
-                    if (v!.length < 6) return 'Mínimo 6 caracteres';
-                    return null;
-                  },
-                ),
-                if (_errorMessage != null) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      _errorMessage!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryColor,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: _isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(_isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'),
-                ),
-                const SizedBox(height: 16),
-                TextButton(
-                  onPressed: () => setState(() {
-                    _isLogin = !_isLogin;
-                    _errorMessage = null;
-                  }),
-                  child: Text(
-                    _isLogin
-                        ? '¿No tienes cuenta? Regístrate'
-                        : '¿Ya tienes cuenta? Inicia sesión',
-                  ),
-                ),
-                const SizedBox(height: 24),
-                OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _signInWithGoogle,
-                  icon: Image.network(
-                    'https://www.google.com/favicon.ico',
-                    width: 20,
-                    height: 20,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.g_mobiledata),
-                  ),
-                  label: const Text('Continuar con Google'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final auth = FirebaseAuth.instance;
-
-      if (_isLogin) {
-        await auth.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-        );
-      } else {
-        final cred = await auth.createUserWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-        );
-        if (cred.user != null) {
-          await cred.user!.updateDisplayName(_nameController.text.trim());
-        }
-      }
-
-      final user = auth.currentUser;
-      if (user != null) {
-        ref.read(app.currentUserIdProvider.notifier).state = user.uid;
-        await DatabaseService.instance.migrateGuestDataToUser(user.uid);
-        widget.onComplete();
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = _getError(e.code));
-    } catch (e) {
-      setState(
-        () => _errorMessage = e.toString().replaceAll('Exception: ', ''),
-      );
-    }
-
-    setState(() => _isLoading = false);
-  }
-
-  Future<void> _signInWithGoogle() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final googleSignIn = GoogleSignIn();
-      final googleUser = await googleSignIn.signIn();
-      if (googleUser == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-      final cred = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final userCred = await FirebaseAuth.instance.signInWithCredential(cred);
-      if (userCred.user != null) {
-        final uid = userCred.user!.uid;
-        ref.read(app.currentUserIdProvider.notifier).state = uid;
-        await DatabaseService.instance.migrateGuestDataToUser(uid);
-        widget.onComplete();
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = _getError(e.code));
-    } catch (e) {
-      setState(
-        () => _errorMessage = e.toString().replaceAll('Exception: ', ''),
-      );
-    }
-
-    setState(() => _isLoading = false);
-  }
-
-  String _getError(String code) {
-    switch (code) {
-      case 'user-not-found':
-        return 'Usuario no encontrado';
-      case 'wrong-password':
-        return 'Contraseña incorrecta';
-      case 'email-already-in-use':
-        return 'Este email ya está registrado';
-      case 'invalid-email':
-        return 'Email inválido';
-      case 'weak-password':
-        return 'La contraseña es muy débil';
-      default:
-        return 'Error: $code';
-    }
   }
 }
